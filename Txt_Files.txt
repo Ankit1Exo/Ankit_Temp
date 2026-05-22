@@ -1,0 +1,118 @@
+Python 3.13.12 (tags/v3.13.12:1cbe481, Feb  3 2026, 18:22:25) [MSC v.1944 64 bit (AMD64)] on win32
+Enter "help" below or click "Help" above for more information.
+
+========== RESTART: C:\Users\AnkitMishra\Downloads\diagnose_w2 (3).py ==========
+Opening PDF picker...
+File: DEL0000523229.pdf
+Size: 27.3 MB
+
+[1/5] Opening PDF...
+    Total pages: 7917
+
+[2/5] Page 1 info
+    Width  x Height: 612 x 792
+    Total words: 680
+
+[3/5] SSN locations on page (these will be our anchors)
+    Found 5 SSN-shaped tokens:
+       [1] x0=138 top=208 (value redacted)
+       [2] x0=540 top=306 (value redacted)
+       [3] x0=138 top=548 (value redacted)
+       [4] x0=341 top=548 (value redacted)
+       [5] x0=540 top=548 (value redacted)
+
+[4/5] Searching for anchor phrases in raw text
+    'name, address': 2 occurrence(s)
+    'name, address,': 1 occurrence(s)
+    'SSA number': 0 occurrence(s)
+    'social security number': 1 occurrence(s)
+    'Employee's': 0 occurrence(s)
+    'Employees': 0 occurrence(s)
+    'e/f': 4 occurrence(s)
+    'Employee's name': 0 occurrence(s)
+
+[5/5] Words around each SSN (looking for name/address)
+======================================================================
+
+SSN #1 at x0=138 top=208
+----------------------------------------------------------------------
+  Box: x=[8,268] y=[148,308], 15 lines
+    top=156 x0=10  'e/f Employee’s name,address, andZIPcode'
+    top=164 x0=18  'JANE L ABAIR'
+    top=172 x0=18  '6699 MICHIGAN RD.'
+    top=181 x0=18  'PLYMOUTH, IN 46563'
+    top=203 x0=9  'b Employer’s FEDIDnumber a Employee’s SSAnumber W-2 WAGES'
+    top=208 x0=38  '11-1111111 XXX-XX-XXXX' <-- SSN LINE
+    top=218 x0=10  '1 Wages, tips,othercomp. 2 Federal income taxwithheld'
+    top=225 x0=60  '15220.13 3758.48'
+    top=235 x0=10  '3 Social security wages 4 Social security taxwithheld'
+    top=242 x0=60  '15220.13 943.65'
+    top=252 x0=10  '5 Medicare wages andtips 6 Medicare taxwithheld'
+    top=259 x0=60  '15220.13 220.69'
+    top=267 x0=9  '7 Social security tips 8 Allocated tips'
+    top=282 x0=10  '9 10 Dependent carebenefits'
+    top=298 x0=9  '11 Nonqualified plans 12aSeeinstructions forbox12'
+
+SSN #2 at x0=540 top=306
+----------------------------------------------------------------------
+  Box: x=[410,670] y=[246,406], 8 lines
+    top=306 x0=466  'Social Security Number: XXX-XX-XXXX' <-- SSN LINE
+    top=313 x0=466  'Taxable Marital Status:'
+    top=320 x0=478  'Married'
+    top=327 x0=466  'Exemptions/Allowances:'
+    top=335 x0=478  'Federal: 0 $10.00 additional tax'
+    top=342 x0=478  'State: 0'
+    top=349 x0=478  'Local: 0'
+    top=386 x0=423  '01'
+
+SSN #3 at x0=138 top=548
+----------------------------------------------------------------------
+  Box: x=[8,268] y=[488,648], 12 lines
+    top=494 x0=19  '205 N. WIGET LANE 205 N. WIGET'
+    top=502 x0=19  'WALNUT CREEK, CA 94598 WALNUT CREEK,'
+    top=543 x0=9  'b Employer’s FEDIDnumber a Employee’s SSAnumber b Employer’s FEDIDnumber'
+    top=548 x0=38  '11-1111111 XXX-XX-XXXX 46-3991361' <-- SSN LINE
+    top=557 x0=9  '7 Social security tips 8 Allocated tips 7 Social security tips'
+    top=573 x0=10  '9 10 Dependent carebenefits 9'
+    top=587 x0=10  '11Nonqualified plans 12a Seeinstructions forbox12 11 Nonqualified plans'
+    top=603 x0=10  '14 Other 12b 14 Other'
+    top=613 x0=104  '12c'
+    top=623 x0=105  '12d'
+    top=634 x0=104  '13Statemp.Ret.plan 3rdpartysickpay'
+    top=639 x0=146  'X'
+
+SSN #4 at x0=341 top=548
+----------------------------------------------------------------------
+  Box: x=[211,471] y=[488,648], 12 lines
+    top=494 x0=221  '205 N. WIGET LANE 205 N. WIGET'
+    top=502 x0=221  'WALNUT CREEK, CA 94598 WALNUT CREEK,'
+    top=543 x0=222  'Employer’s FEDIDnumber a Employee’s SSAnumber b Employer’s FEDIDnumber'
+    top=548 x0=242  '11-1111111 XXX-XX-XXXX 46-3991361' <-- SSN LINE
+    top=557 x0=211  '7 Social security tips 8 Allocated tips 7 Social security tips'
+    top=573 x0=211  '9 10 Dependent carebenefits 9'
+    top=587 x0=212  '11 Nonqualified plans 1122a 11 Nonqualified plans'
+    top=603 x0=212  '14 Other 12b 14 Other'
+    top=613 x0=307  '12c'
+    top=623 x0=307  '12d'
+    top=634 x0=307  '13Statemp.Ret.plan 3rdpartysickpay'
+    top=639 x0=346  'X'
+
+SSN #5 at x0=540 top=548
+----------------------------------------------------------------------
+  Box: x=[410,670] y=[488,648], 12 lines
+    top=494 x0=420  '205 N. WIGET LANE'
+    top=502 x0=420  'WALNUT CREEK, CA 94598'
+    top=543 x0=413  'b Employer’s FEDIDnumber a Employee’s SSAnumber'
+    top=548 x0=442  '11-1111111 XXX-XX-XXXX' <-- SSN LINE
+    top=557 x0=413  '7 Social security tips 8 Allocated tips'
+    top=573 x0=413  '9 10 Dependent carebenefits'
+    top=588 x0=414  '11 Nonqualified plans 12a'
+    top=603 x0=414  '14 Other 12b'
+    top=613 x0=509  '12c'
+    top=623 x0=509  '12d'
+    top=633 x0=509  '13 Statemp.Ret.plan3rdpartysickpay'
+    top=639 x0=552  'X'
+
+======================================================================
+Diagnostic complete.
+Please redact employee names + addresses before pasting output.
