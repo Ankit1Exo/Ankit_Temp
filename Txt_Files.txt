@@ -116,3 +116,32 @@ SSN #5 at x0=540 top=548
 ======================================================================
 Diagnostic complete.
 Please redact employee names + addresses before pasting output.
+
+
+
+
+
+
+/* Return ALL columns for every row whose ZIP is tied to 2+ different States.
+   Only Zip + State must be non-blank; other columns may be blank.
+   Blank / whitespace / literal 'null' are treated as empty and ignored. */
+WITH valued AS (                       -- rows usable for the conflict test
+    SELECT *,
+           NULLIF(TRIM([Zip Code]), N'')                          AS zip_k,
+           UPPER(NULLIF(TRIM([State of Residence (if US)]), N'')) AS state_k
+    FROM dbo.BreachData
+    WHERE NULLIF(TRIM([Zip Code]), N'') IS NOT NULL
+      AND NULLIF(TRIM([State of Residence (if US)]), N'') IS NOT NULL
+      AND LOWER(TRIM([Zip Code]))                    <> 'null'
+      AND LOWER(TRIM([State of Residence (if US)]))  <> 'null'
+),
+conflict_zips AS (                     -- ZIPs with more than one distinct State
+    SELECT zip_k
+    FROM valued
+    GROUP BY zip_k
+    HAVING COUNT(DISTINCT state_k) > 1
+)
+SELECT v.*                             -- all original columns
+FROM valued v
+JOIN conflict_zips c ON c.zip_k = v.zip_k
+ORDER BY v.zip_k, v.state_k;
