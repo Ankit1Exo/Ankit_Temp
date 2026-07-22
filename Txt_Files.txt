@@ -603,3 +603,32 @@ CREATE CLUSTERED INDEX ix_src_ssnkey ON #src(ssn_key);
 GO
 
 
+
+
+SELECT TOP (500)
+    t.[Social Security Number],
+
+    t.[First Name] AS first_now,
+    CASE WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND t.[First Name] NOT LIKE N'%Unknown%'
+         THEN s.[First_Name] ELSE t.[First Name] END AS first_new,
+
+    t.[Last Name] AS last_now,
+    CASE WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND t.[Last Name] NOT LIKE N'%Unknown%'
+         THEN s.[Last_Name] ELSE t.[Last Name] END AS last_new,
+
+    t.[Residential Address] AS addr_now,
+    CASE WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null'
+         THEN s.[Residential_Address] ELSE t.[Residential Address] END AS addr_new,
+
+    t.[Zip Code] AS zip_now,
+    CASE WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null'
+         THEN s.[Zip_Code] ELSE t.[Zip Code] END AS zip_new,
+
+    t.[Phone Number - Personal] AS phone_now,
+    CASE WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null'
+         THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END AS phone_new
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+JOIN #src s ON s.ssn_key = t.ssn_key
+WHERE t.ssn_key <> ''
+ORDER BY t.[Social Security Number];
+
