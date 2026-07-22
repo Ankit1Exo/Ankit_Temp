@@ -145,3 +145,113 @@ SELECT v.*                             -- all original columns
 FROM valued v
 JOIN conflict_zips c ON c.zip_k = v.zip_k
 ORDER BY v.zip_k, v.state_k;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+SELECT TOP (1000) [First_Name]
+      ,[Middle_Name]
+      ,[Last_Name]
+      ,[Suffix]
+      ,[Social_Security_Number]
+      ,[Full_Date_of_Birth_MM_DD_YYYY]
+      ,[Tax_Identification_Number]
+      ,[Driver_s_License_Number]
+      ,[Passport_Number]
+      ,[Government_Issued_ID_Number]
+      ,[Residential_Address]
+      ,[City]
+      ,[State_of_Residence_if_US]
+      ,[Province_of_Residence_if_Canada]
+      ,[Zip_Code]
+      ,[Country_of_Residence]
+      ,[Other_Address]
+      ,[Employee_Identification_Number]
+      ,[Phone_Number]
+      ,[Email_Address_Personal]
+      ,[Work_Related_Information]
+      ,[Data_Subject_Type]
+      ,[Birth_Information]
+      ,[Address_Comments]
+      ,[Contact_Information]
+      ,[DL_Issuing_Country]
+      ,[DL_Issuing_Province_if_Canada]
+      ,[DL_Issuing_State_if_US]
+      ,[Passport_Country]
+      ,[Government_ID_Issuing_Country]
+      ,[Government_Issued_Identification]
+      ,[Health_Related_Information]
+      ,[Family_Information]
+      ,[Financial_Account_Information]
+      ,[Demographic_Information]
+      ,[Biometric_Data]
+      ,[PI_Notes]
+      ,[Access_Credentials_Non_Financial_Account]
+      ,[Student_Related_Information]
+  FROM [Ankit_STS].[s_checks].[SSN_Based]
+
+
+
+
+
+
+
+
+
+
+SELECT TOP (1000) [DOCIDs]
+      ,[First Name]
+      ,[Middle Name]
+      ,[Last Name]
+      ,[Suffix]
+      ,[Data Subject Type]
+      ,[Residential Address]
+      ,[City]
+      ,[State of Residence (if US)]
+      ,[Province of Residence (if Canada)]
+      ,[Zip Code]
+      ,[Country of Residence]
+      ,[Email Address - Personal]
+      ,[Phone Number - Personal]
+      ,[Contact Information]
+      ,[Address Comments]
+      ,[Full Date of Birth (MM/DD/YYYY)]
+      ,[Birth Information]
+      ,[Social Security Number]
+      ,[Tax Identification Number]
+      ,[Government- Issued Identification]
+      ,[Government-Issued ID Number]
+      ,[Government ID Issuing Country]
+      ,[Driver's License Number]
+      ,[DL Issuing Country]
+      ,[DL Issuing State (if US)]
+      ,[DL Issuing Province (if Canada)]
+      ,[Passport Number]
+      ,[Passport Country]
+      ,[Family Information]
+      ,[Access Credentials (Non-Financial Account)]
+      ,[Financial Account Information]
+      ,[Employee Identification Number]
+      ,[Work-Related Information]
+      ,[Biometric Data]
+      ,[Health Related Information]
+      ,[Demographic Information]
+      ,[PI Notes]
+      ,[DOBs]
+      ,[Unique_ID]
+      ,[Unique_id_New]
+      ,[Unique_id_names]
+      ,[Phone_Number_Backup]
+  FROM [Ankit_STS].[dbo].[sts_master_dedup_v2]
+
