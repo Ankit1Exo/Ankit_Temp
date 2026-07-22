@@ -560,3 +560,46 @@ GROUP BY z.column_name
 ORDER BY wipeouts DESC;
 
 
+
+
+
+-- add digits-only computed key on the target
+
+
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
+    ADD ssn_key AS CAST(
+        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Social Security Number])),
+        '-',''),' ',''),'.',''),'/',''),'(','') AS varchar(30)) PERSISTED;
+GO
+CREATE INDEX ix_tgt_ssnkey
+    ON [Ankit_STS].[dbo].[sts_master_dedup_v2](ssn_key);
+GO
+
+
+
+
+
+
+
+DROP TABLE IF EXISTS #src;
+GO
+SELECT *,
+    CAST(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Social_Security_Number])),
+        '-',''),' ',''),'.',''),'/',''),'(','') AS varchar(30)) AS ssn_key
+INTO #src
+FROM [Ankit_STS].[s_checks].[SSN_Based]
+WHERE NULLIF(LTRIM(RTRIM([Social_Security_Number])), '') IS NOT NULL
+  AND LOWER(LTRIM(RTRIM([Social_Security_Number]))) <> 'null';
+GO
+-- keep one row per SSN (fixed dedup: select only rn, no SELECT *)
+;WITH d AS (
+    SELECT ROW_NUMBER() OVER (PARTITION BY ssn_key ORDER BY (SELECT NULL)) AS rn
+    FROM #src
+)
+DELETE FROM d WHERE rn > 1;
+GO
+DELETE FROM #src WHERE ssn_key = '';           -- drop rows with no digits
+CREATE CLUSTERED INDEX ix_src_ssnkey ON #src(ssn_key);
+GO
+
+
