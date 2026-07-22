@@ -232,3 +232,15 @@ FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
 WHERE t._done = 1
 ORDER BY t.[Social Security Number];
 
+
+
+
+DROP INDEX IF EXISTS ix_tgt_done ON [Ankit_STS].[dbo].[sts_master_dedup_v2];
+GO
+DROP INDEX IF EXISTS ix_tgt_key ON [Ankit_STS].[dbo].[sts_master_dedup_v2];
+GO
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] DROP COLUMN IF EXISTS _done;
+GO
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] DROP COLUMN IF EXISTS ssn_key;
+GO
+
