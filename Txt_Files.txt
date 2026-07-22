@@ -536,3 +536,27 @@ FROM (
 ) AS x
 WHERE ISNULL(x.old_value, N'') <> ISNULL(x.new_value, N'')
 ORDER BY x.[Social Security Number], x.column_name;
+
+
+
+SELECT column_name, COUNT(*) AS wipeouts
+FROM (
+    SELECT t.[Social Security Number], v.column_name, v.old_value, v.new_value
+    FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+    CROSS APPLY (SELECT STUFF((SELECT '' + SUBSTRING(t.[Social Security Number], n.number, 1)
+                               FROM master..spt_values n
+                               WHERE n.type = 'P' AND n.number BETWEEN 1 AND LEN(t.[Social Security Number])
+                                 AND SUBSTRING(t.[Social Security Number], n.number, 1) LIKE '[0-9]'
+                               FOR XML PATH('')), 1, 0, '') AS ssn_key) tk
+    JOIN #src s ON s.ssn_key = tk.ssn_key
+    CROSS APPLY (VALUES
+        /* ---- the SAME 36 (column, old, new) rows from your preview go here ---- */
+    ) AS v(column_name, old_value, new_value)
+    WHERE tk.ssn_key <> ''
+) z
+WHERE ISNULL(z.new_value, N'') = N''      -- only wipe-outs
+  AND ISNULL(z.old_value, N'') <> N''     -- that actually had data before
+GROUP BY z.column_name
+ORDER BY wipeouts DESC;
+
+
