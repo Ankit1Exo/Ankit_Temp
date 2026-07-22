@@ -1,0 +1,984 @@
+
+
+Update for Based ON SSN with Indexes
+
+
+BEGIN TRAN;
+
+UPDATE t
+SET
+    t.[First Name] = CASE
+        WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND t.[First Name] NOT LIKE N'%Unknown%'
+        THEN s.[First_Name] ELSE t.[First Name] END,
+    t.[Middle Name] = CASE
+        WHEN t.[Middle Name] IS NOT NULL AND LTRIM(RTRIM(t.[Middle Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Middle Name]))) <> N'null'
+        THEN s.[Middle_Name] ELSE t.[Middle Name] END,
+    t.[Last Name] = CASE
+        WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND t.[Last Name] NOT LIKE N'%Unknown%'
+        THEN s.[Last_Name] ELSE t.[Last Name] END,
+    t.[Suffix] = CASE
+        WHEN t.[Suffix] IS NOT NULL AND LTRIM(RTRIM(t.[Suffix])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Suffix]))) <> N'null'
+        THEN s.[Suffix] ELSE t.[Suffix] END,
+    t.[Full Date of Birth (MM/DD/YYYY)] = CASE
+        WHEN t.[Full Date of Birth (MM/DD/YYYY)] IS NOT NULL AND LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)]))) <> N'null'
+        THEN s.[Full_Date_of_Birth_MM_DD_YYYY] ELSE t.[Full Date of Birth (MM/DD/YYYY)] END,
+    t.[Tax Identification Number] = CASE
+        WHEN t.[Tax Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Tax Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Tax Identification Number]))) <> N'null'
+        THEN s.[Tax_Identification_Number] ELSE t.[Tax Identification Number] END,
+    t.[Driver's License Number] = CASE
+        WHEN t.[Driver's License Number] IS NOT NULL AND LTRIM(RTRIM(t.[Driver's License Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Driver's License Number]))) <> N'null'
+        THEN s.[Driver_s_License_Number] ELSE t.[Driver's License Number] END,
+    t.[Passport Number] = CASE
+        WHEN t.[Passport Number] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Number]))) <> N'null'
+        THEN s.[Passport_Number] ELSE t.[Passport Number] END,
+    t.[Government-Issued ID Number] = CASE
+        WHEN t.[Government-Issued ID Number] IS NOT NULL AND LTRIM(RTRIM(t.[Government-Issued ID Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government-Issued ID Number]))) <> N'null'
+        THEN s.[Government_Issued_ID_Number] ELSE t.[Government-Issued ID Number] END,
+    t.[Residential Address] = CASE
+        WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null'
+        THEN s.[Residential_Address] ELSE t.[Residential Address] END,
+    t.[City] = CASE
+        WHEN t.[City] IS NOT NULL AND LTRIM(RTRIM(t.[City])) <> N'' AND LOWER(LTRIM(RTRIM(t.[City]))) <> N'null'
+        THEN s.[City] ELSE t.[City] END,
+    t.[State of Residence (if US)] = CASE
+        WHEN t.[State of Residence (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[State of Residence (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[State of Residence (if US)]))) <> N'null'
+        THEN s.[State_of_Residence_if_US] ELSE t.[State of Residence (if US)] END,
+    t.[Province of Residence (if Canada)] = CASE
+        WHEN t.[Province of Residence (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[Province of Residence (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Province of Residence (if Canada)]))) <> N'null'
+        THEN s.[Province_of_Residence_if_Canada] ELSE t.[Province of Residence (if Canada)] END,
+    t.[Zip Code] = CASE
+        WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null'
+        THEN s.[Zip_Code] ELSE t.[Zip Code] END,
+    t.[Country of Residence] = CASE
+        WHEN t.[Country of Residence] IS NOT NULL AND LTRIM(RTRIM(t.[Country of Residence])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Country of Residence]))) <> N'null'
+        THEN s.[Country_of_Residence] ELSE t.[Country of Residence] END,
+    t.[Employee Identification Number] = CASE
+        WHEN t.[Employee Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Employee Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Employee Identification Number]))) <> N'null'
+        THEN s.[Employee_Identification_Number] ELSE t.[Employee Identification Number] END,
+    t.[Phone Number - Personal] = CASE
+        WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null'
+        THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END,
+    t.[Email Address - Personal] = CASE
+        WHEN t.[Email Address - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Email Address - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Email Address - Personal]))) <> N'null'
+        THEN s.[Email_Address_Personal] ELSE t.[Email Address - Personal] END,
+    t.[Work-Related Information] = CASE
+        WHEN t.[Work-Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Work-Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Work-Related Information]))) <> N'null'
+        THEN s.[Work_Related_Information] ELSE t.[Work-Related Information] END,
+    t.[Data Subject Type] = CASE
+        WHEN t.[Data Subject Type] IS NOT NULL AND LTRIM(RTRIM(t.[Data Subject Type])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Data Subject Type]))) <> N'null'
+        THEN s.[Data_Subject_Type] ELSE t.[Data Subject Type] END,
+    t.[Birth Information] = CASE
+        WHEN t.[Birth Information] IS NOT NULL AND LTRIM(RTRIM(t.[Birth Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Birth Information]))) <> N'null'
+        THEN s.[Birth_Information] ELSE t.[Birth Information] END,
+    t.[Address Comments] = CASE
+        WHEN t.[Address Comments] IS NOT NULL AND LTRIM(RTRIM(t.[Address Comments])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Address Comments]))) <> N'null'
+        THEN s.[Address_Comments] ELSE t.[Address Comments] END,
+    t.[Contact Information] = CASE
+        WHEN t.[Contact Information] IS NOT NULL AND LTRIM(RTRIM(t.[Contact Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Contact Information]))) <> N'null'
+        THEN s.[Contact_Information] ELSE t.[Contact Information] END,
+    t.[DL Issuing Country] = CASE
+        WHEN t.[DL Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Country]))) <> N'null'
+        THEN s.[DL_Issuing_Country] ELSE t.[DL Issuing Country] END,
+    t.[DL Issuing Province (if Canada)] = CASE
+        WHEN t.[DL Issuing Province (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Province (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Province (if Canada)]))) <> N'null'
+        THEN s.[DL_Issuing_Province_if_Canada] ELSE t.[DL Issuing Province (if Canada)] END,
+    t.[DL Issuing State (if US)] = CASE
+        WHEN t.[DL Issuing State (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing State (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing State (if US)]))) <> N'null'
+        THEN s.[DL_Issuing_State_if_US] ELSE t.[DL Issuing State (if US)] END,
+    t.[Passport Country] = CASE
+        WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null'
+        THEN s.[Passport_Country] ELSE t.[Passport Country] END,
+    t.[Government ID Issuing Country] = CASE
+        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null'
+        THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END,
+    t.[Government- Issued Identification] = CASE
+        WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null'
+        THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END,
+    t.[Health Related Information] = CASE
+        WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null'
+        THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END,
+    t.[Family Information] = CASE
+        WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null'
+        THEN s.[Family_Information] ELSE t.[Family Information] END,
+    t.[Financial Account Information] = CASE
+        WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null'
+        THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END,
+    t.[Demographic Information] = CASE
+        WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null'
+        THEN s.[Demographic_Information] ELSE t.[Demographic Information] END,
+    t.[Biometric Data] = CASE
+        WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null'
+        THEN s.[Biometric_Data] ELSE t.[Biometric Data] END,
+    t.[PI Notes] = CASE
+        WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null'
+        THEN s.[PI_Notes] ELSE t.[PI Notes] END,
+    t.[Access Credentials (Non-Financial Account)] = CASE
+        WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
+        THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+JOIN #src s ON s.ssn_key = t.ssn_key
+WHERE t.ssn_key IS NOT NULL AND t.ssn_key <> '' AND t.ssn_key <> 'NULL';
+
+SELECT @@ROWCOUNT AS rows_updated;
+-- ROLLBACK TRAN;   /   COMMIT TRAN;
+
+
+
+
+
+
+
+Update for Based ON SSN without Indexes
+
+BEGIN TRAN;   -- review, then COMMIT or ROLLBACK
+
+/* One row per source SSN, keyed on DIGITS ONLY. Built once. */
+DROP TABLE IF EXISTS #src;
+SELECT *
+INTO #src
+FROM (
+    SELECT s0.*,
+        STUFF((SELECT '' + SUBSTRING(s0.[Social_Security_Number], v.number, 1)
+               FROM master..spt_values v
+               WHERE v.type = 'P' AND v.number BETWEEN 1 AND LEN(s0.[Social_Security_Number])
+                 AND SUBSTRING(s0.[Social_Security_Number], v.number, 1) LIKE '[0-9]'
+               FOR XML PATH('')), 1, 0, '') AS ssn_key
+    FROM [Ankit_STS].[s_checks].[Merged_Data] s0
+    WHERE NULLIF(LTRIM(RTRIM(s0.[Social_Security_Number])), '') IS NOT NULL
+) z
+WHERE z.ssn_key <> '';                       -- at least one digit
+-- keep one row per SSN
+;WITH d AS (
+    SELECT ROW_NUMBER() OVER (PARTITION BY ssn_key ORDER BY (SELECT NULL)) AS rn
+    FROM #src
+)
+DELETE FROM d WHERE rn > 1;
+
+UPDATE t
+SET
+    t.[First Name] = CASE
+        WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'unknown'
+        THEN s.[First_Name] ELSE t.[First Name] END,
+    t.[Middle Name] = CASE
+        WHEN t.[Middle Name] IS NOT NULL AND LTRIM(RTRIM(t.[Middle Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Middle Name]))) <> N'null'
+        THEN s.[Middle_Name] ELSE t.[Middle Name] END,
+    t.[Last Name] = CASE
+        WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'unknown'
+        THEN s.[Last_Name] ELSE t.[Last Name] END,
+    t.[Suffix] = CASE
+        WHEN t.[Suffix] IS NOT NULL AND LTRIM(RTRIM(t.[Suffix])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Suffix]))) <> N'null'
+        THEN s.[Suffix] ELSE t.[Suffix] END,
+    t.[Full Date of Birth (MM/DD/YYYY)] = CASE
+        WHEN t.[Full Date of Birth (MM/DD/YYYY)] IS NOT NULL AND LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)]))) <> N'null'
+        THEN s.[Full_Date_of_Birth_MM_DD_YYYY] ELSE t.[Full Date of Birth (MM/DD/YYYY)] END,
+    t.[Tax Identification Number] = CASE
+        WHEN t.[Tax Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Tax Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Tax Identification Number]))) <> N'null'
+        THEN s.[Tax_Identification_Number] ELSE t.[Tax Identification Number] END,
+    t.[Driver's License Number] = CASE
+        WHEN t.[Driver's License Number] IS NOT NULL AND LTRIM(RTRIM(t.[Driver's License Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Driver's License Number]))) <> N'null'
+        THEN s.[Driver_s_License_Number] ELSE t.[Driver's License Number] END,
+    t.[Passport Number] = CASE
+        WHEN t.[Passport Number] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Number]))) <> N'null'
+        THEN s.[Passport_Number] ELSE t.[Passport Number] END,
+    t.[Government-Issued ID Number] = CASE
+        WHEN t.[Government-Issued ID Number] IS NOT NULL AND LTRIM(RTRIM(t.[Government-Issued ID Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government-Issued ID Number]))) <> N'null'
+        THEN s.[Government_Issued_ID_Number] ELSE t.[Government-Issued ID Number] END,
+    t.[Residential Address] = CASE
+        WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null'
+        THEN s.[Residential_Address] ELSE t.[Residential Address] END,
+    t.[City] = CASE
+        WHEN t.[City] IS NOT NULL AND LTRIM(RTRIM(t.[City])) <> N'' AND LOWER(LTRIM(RTRIM(t.[City]))) <> N'null'
+        THEN s.[City] ELSE t.[City] END,
+    t.[State of Residence (if US)] = CASE
+        WHEN t.[State of Residence (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[State of Residence (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[State of Residence (if US)]))) <> N'null'
+        THEN s.[State_of_Residence_if_US] ELSE t.[State of Residence (if US)] END,
+    t.[Province of Residence (if Canada)] = CASE
+        WHEN t.[Province of Residence (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[Province of Residence (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Province of Residence (if Canada)]))) <> N'null'
+        THEN s.[Province_of_Residence_if_Canada] ELSE t.[Province of Residence (if Canada)] END,
+    t.[Zip Code] = CASE
+        WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null'
+        THEN s.[Zip_Code] ELSE t.[Zip Code] END,
+    t.[Country of Residence] = CASE
+        WHEN t.[Country of Residence] IS NOT NULL AND LTRIM(RTRIM(t.[Country of Residence])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Country of Residence]))) <> N'null'
+        THEN s.[Country_of_Residence] ELSE t.[Country of Residence] END,
+    t.[Employee Identification Number] = CASE
+        WHEN t.[Employee Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Employee Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Employee Identification Number]))) <> N'null'
+        THEN s.[Employee_Identification_Number] ELSE t.[Employee Identification Number] END,
+    t.[Phone Number - Personal] = CASE
+        WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null'
+        THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END,
+    t.[Email Address - Personal] = CASE
+        WHEN t.[Email Address - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Email Address - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Email Address - Personal]))) <> N'null'
+        THEN s.[Email_Address_Personal] ELSE t.[Email Address - Personal] END,
+    t.[Work-Related Information] = CASE
+        WHEN t.[Work-Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Work-Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Work-Related Information]))) <> N'null'
+        THEN s.[Work_Related_Information] ELSE t.[Work-Related Information] END,
+    t.[Data Subject Type] = CASE
+        WHEN t.[Data Subject Type] IS NOT NULL AND LTRIM(RTRIM(t.[Data Subject Type])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Data Subject Type]))) <> N'null'
+        THEN s.[Data_Subject_Type] ELSE t.[Data Subject Type] END,
+    t.[Birth Information] = CASE
+        WHEN t.[Birth Information] IS NOT NULL AND LTRIM(RTRIM(t.[Birth Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Birth Information]))) <> N'null'
+        THEN s.[Birth_Information] ELSE t.[Birth Information] END,
+    t.[Address Comments] = CASE
+        WHEN t.[Address Comments] IS NOT NULL AND LTRIM(RTRIM(t.[Address Comments])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Address Comments]))) <> N'null'
+        THEN s.[Address_Comments] ELSE t.[Address Comments] END,
+    t.[Contact Information] = CASE
+        WHEN t.[Contact Information] IS NOT NULL AND LTRIM(RTRIM(t.[Contact Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Contact Information]))) <> N'null'
+        THEN s.[Contact_Information] ELSE t.[Contact Information] END,
+    t.[DL Issuing Country] = CASE
+        WHEN t.[DL Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Country]))) <> N'null'
+        THEN s.[DL_Issuing_Country] ELSE t.[DL Issuing Country] END,
+    t.[DL Issuing Province (if Canada)] = CASE
+        WHEN t.[DL Issuing Province (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Province (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Province (if Canada)]))) <> N'null'
+        THEN s.[DL_Issuing_Province_if_Canada] ELSE t.[DL Issuing Province (if Canada)] END,
+    t.[DL Issuing State (if US)] = CASE
+        WHEN t.[DL Issuing State (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing State (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing State (if US)]))) <> N'null'
+        THEN s.[DL_Issuing_State_if_US] ELSE t.[DL Issuing State (if US)] END,
+    t.[Passport Country] = CASE
+        WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null'
+        THEN s.[Passport_Country] ELSE t.[Passport Country] END,
+    t.[Government ID Issuing Country] = CASE
+        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null'
+        THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END,
+    t.[Government- Issued Identification] = CASE
+        WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null'
+        THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END,
+    t.[Health Related Information] = CASE
+        WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null'
+        THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END,
+    t.[Family Information] = CASE
+        WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null'
+        THEN s.[Family_Information] ELSE t.[Family Information] END,
+    t.[Financial Account Information] = CASE
+        WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null'
+        THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END,
+    t.[Demographic Information] = CASE
+        WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null'
+        THEN s.[Demographic_Information] ELSE t.[Demographic Information] END,
+    t.[Biometric Data] = CASE
+        WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null'
+        THEN s.[Biometric_Data] ELSE t.[Biometric Data] END,
+    t.[PI Notes] = CASE
+        WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null'
+        THEN s.[PI_Notes] ELSE t.[PI Notes] END,
+    t.[Access Credentials (Non-Financial Account)] = CASE
+        WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
+        THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+CROSS APPLY (SELECT STUFF((SELECT '' + SUBSTRING(t.[Social Security Number], v.number, 1)
+                           FROM master..spt_values v
+                           WHERE v.type = 'P' AND v.number BETWEEN 1 AND LEN(t.[Social Security Number])
+                             AND SUBSTRING(t.[Social Security Number], v.number, 1) LIKE '[0-9]'
+                           FOR XML PATH('')), 1, 0, '') AS ssn_key) tk
+JOIN #src s ON s.ssn_key = tk.ssn_key
+WHERE tk.ssn_key <> '';
+
+SELECT @@ROWCOUNT AS rows_updated;
+-- ROLLBACK TRAN;   /  COMMIT TRAN;
+
+
+
+Cleanup (after you've committed and verified)
+
+
+
+DROP INDEX ix_tgt_ssnkey ON [Ankit_STS].[dbo].[sts_master_dedup_v2];
+GO
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] DROP COLUMN ssn_key;
+GO
+DROP TABLE IF EXISTS #src;
+
+
+
+Step 1 — Add the indexed DL key to the TARGET
+
+
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
+    ADD dl_key AS CAST(
+        UPPER(REPLACE(REPLACE(LTRIM(RTRIM([Driver's License Number])),
+        '-',''),' ','')) AS varchar(50)) PERSISTED;
+GO
+CREATE INDEX ix_tgt_dlkey
+    ON [Ankit_STS].[dbo].[sts_master_dedup_v2](dl_key);
+GO
+
+
+
+
+DROP TABLE IF EXISTS #dsrc;
+GO
+SELECT *,
+    CAST(UPPER(REPLACE(REPLACE(LTRIM(RTRIM([Driver_s_License_Number])),
+        '-',''),' ','')) AS varchar(50)) AS dl_key
+INTO #dsrc
+FROM [Ankit_STS].[s_checks].[Merged_Data]
+WHERE NULLIF(LTRIM(RTRIM([Driver_s_License_Number])), '') IS NOT NULL
+  AND LOWER(LTRIM(RTRIM([Driver_s_License_Number]))) <> 'null';
+GO
+-- keep one row per DL key (select only rn, no SELECT *)
+;WITH d AS (
+    SELECT ROW_NUMBER() OVER (PARTITION BY dl_key ORDER BY (SELECT NULL)) AS rn
+    FROM #dsrc
+)
+DELETE FROM d WHERE rn > 1;
+GO
+DELETE FROM #dsrc WHERE dl_key IS NULL OR dl_key = '' OR dl_key = 'NULL';
+CREATE CLUSTERED INDEX ix_dsrc_dlkey ON #dsrc(dl_key);
+GO
+
+
+
+Step 3 — The UPDATE, joined on the indexed DL key
+
+
+
+BEGIN TRAN;
+
+UPDATE t
+SET
+    t.[First Name] = CASE
+        WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND t.[First Name] NOT LIKE N'%Unknown%'
+        THEN s.[First_Name] ELSE t.[First Name] END,
+    t.[Middle Name] = CASE
+        WHEN t.[Middle Name] IS NOT NULL AND LTRIM(RTRIM(t.[Middle Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Middle Name]))) <> N'null'
+        THEN s.[Middle_Name] ELSE t.[Middle Name] END,
+    t.[Last Name] = CASE
+        WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND t.[Last Name] NOT LIKE N'%Unknown%'
+        THEN s.[Last_Name] ELSE t.[Last Name] END,
+    t.[Suffix] = CASE
+        WHEN t.[Suffix] IS NOT NULL AND LTRIM(RTRIM(t.[Suffix])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Suffix]))) <> N'null'
+        THEN s.[Suffix] ELSE t.[Suffix] END,
+    t.[Full Date of Birth (MM/DD/YYYY)] = CASE
+        WHEN t.[Full Date of Birth (MM/DD/YYYY)] IS NOT NULL AND LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)]))) <> N'null'
+        THEN s.[Full_Date_of_Birth_MM_DD_YYYY] ELSE t.[Full Date of Birth (MM/DD/YYYY)] END,
+    t.[Tax Identification Number] = CASE
+        WHEN t.[Tax Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Tax Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Tax Identification Number]))) <> N'null'
+        THEN s.[Tax_Identification_Number] ELSE t.[Tax Identification Number] END,
+    t.[Driver's License Number] = CASE
+        WHEN t.[Driver's License Number] IS NOT NULL AND LTRIM(RTRIM(t.[Driver's License Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Driver's License Number]))) <> N'null'
+        THEN s.[Driver_s_License_Number] ELSE t.[Driver's License Number] END,
+    t.[Passport Number] = CASE
+        WHEN t.[Passport Number] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Number]))) <> N'null'
+        THEN s.[Passport_Number] ELSE t.[Passport Number] END,
+    t.[Government-Issued ID Number] = CASE
+        WHEN t.[Government-Issued ID Number] IS NOT NULL AND LTRIM(RTRIM(t.[Government-Issued ID Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government-Issued ID Number]))) <> N'null'
+        THEN s.[Government_Issued_ID_Number] ELSE t.[Government-Issued ID Number] END,
+    t.[Residential Address] = CASE
+        WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null'
+        THEN s.[Residential_Address] ELSE t.[Residential Address] END,
+    t.[City] = CASE
+        WHEN t.[City] IS NOT NULL AND LTRIM(RTRIM(t.[City])) <> N'' AND LOWER(LTRIM(RTRIM(t.[City]))) <> N'null'
+        THEN s.[City] ELSE t.[City] END,
+    t.[State of Residence (if US)] = CASE
+        WHEN t.[State of Residence (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[State of Residence (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[State of Residence (if US)]))) <> N'null'
+        THEN s.[State_of_Residence_if_US] ELSE t.[State of Residence (if US)] END,
+    t.[Province of Residence (if Canada)] = CASE
+        WHEN t.[Province of Residence (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[Province of Residence (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Province of Residence (if Canada)]))) <> N'null'
+        THEN s.[Province_of_Residence_if_Canada] ELSE t.[Province of Residence (if Canada)] END,
+    t.[Zip Code] = CASE
+        WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null'
+        THEN s.[Zip_Code] ELSE t.[Zip Code] END,
+    t.[Country of Residence] = CASE
+        WHEN t.[Country of Residence] IS NOT NULL AND LTRIM(RTRIM(t.[Country of Residence])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Country of Residence]))) <> N'null'
+        THEN s.[Country_of_Residence] ELSE t.[Country of Residence] END,
+    t.[Employee Identification Number] = CASE
+        WHEN t.[Employee Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Employee Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Employee Identification Number]))) <> N'null'
+        THEN s.[Employee_Identification_Number] ELSE t.[Employee Identification Number] END,
+    t.[Phone Number - Personal] = CASE
+        WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null'
+        THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END,
+    t.[Email Address - Personal] = CASE
+        WHEN t.[Email Address - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Email Address - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Email Address - Personal]))) <> N'null'
+        THEN s.[Email_Address_Personal] ELSE t.[Email Address - Personal] END,
+    t.[Work-Related Information] = CASE
+        WHEN t.[Work-Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Work-Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Work-Related Information]))) <> N'null'
+        THEN s.[Work_Related_Information] ELSE t.[Work-Related Information] END,
+    t.[Data Subject Type] = CASE
+        WHEN t.[Data Subject Type] IS NOT NULL AND LTRIM(RTRIM(t.[Data Subject Type])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Data Subject Type]))) <> N'null'
+        THEN s.[Data_Subject_Type] ELSE t.[Data Subject Type] END,
+    t.[Birth Information] = CASE
+        WHEN t.[Birth Information] IS NOT NULL AND LTRIM(RTRIM(t.[Birth Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Birth Information]))) <> N'null'
+        THEN s.[Birth_Information] ELSE t.[Birth Information] END,
+    t.[Address Comments] = CASE
+        WHEN t.[Address Comments] IS NOT NULL AND LTRIM(RTRIM(t.[Address Comments])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Address Comments]))) <> N'null'
+        THEN s.[Address_Comments] ELSE t.[Address Comments] END,
+    t.[Contact Information] = CASE
+        WHEN t.[Contact Information] IS NOT NULL AND LTRIM(RTRIM(t.[Contact Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Contact Information]))) <> N'null'
+        THEN s.[Contact_Information] ELSE t.[Contact Information] END,
+    t.[DL Issuing Country] = CASE
+        WHEN t.[DL Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Country]))) <> N'null'
+        THEN s.[DL_Issuing_Country] ELSE t.[DL Issuing Country] END,
+    t.[DL Issuing Province (if Canada)] = CASE
+        WHEN t.[DL Issuing Province (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Province (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Province (if Canada)]))) <> N'null'
+        THEN s.[DL_Issuing_Province_if_Canada] ELSE t.[DL Issuing Province (if Canada)] END,
+    t.[DL Issuing State (if US)] = CASE
+        WHEN t.[DL Issuing State (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing State (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing State (if US)]))) <> N'null'
+        THEN s.[DL_Issuing_State_if_US] ELSE t.[DL Issuing State (if US)] END,
+    t.[Passport Country] = CASE
+        WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null'
+        THEN s.[Passport_Country] ELSE t.[Passport Country] END,
+    t.[Government ID Issuing Country] = CASE
+        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null'
+        THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END,
+    t.[Government- Issued Identification] = CASE
+        WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null'
+        THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END,
+    t.[Health Related Information] = CASE
+        WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null'
+        THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END,
+    t.[Family Information] = CASE
+        WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null'
+        THEN s.[Family_Information] ELSE t.[Family Information] END,
+    t.[Financial Account Information] = CASE
+        WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null'
+        THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END,
+    t.[Demographic Information] = CASE
+        WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null'
+        THEN s.[Demographic_Information] ELSE t.[Demographic Information] END,
+    t.[Biometric Data] = CASE
+        WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null'
+        THEN s.[Biometric_Data] ELSE t.[Biometric Data] END,
+    t.[PI Notes] = CASE
+        WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null'
+        THEN s.[PI_Notes] ELSE t.[PI Notes] END,
+    t.[Access Credentials (Non-Financial Account)] = CASE
+        WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
+        THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+JOIN #dsrc s ON s.dl_key = t.dl_key
+WHERE t.dl_key IS NOT NULL AND t.dl_key <> '' AND t.dl_key <> 'NULL';
+
+SELECT @@ROWCOUNT AS rows_updated;
+-- ROLLBACK TRAN;   /   COMMIT TRAN;
+
+
+
+
+Step 1 — Add the indexed Passport key to the TARGET
+
+
+
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
+    ADD pp_key AS CAST(
+        UPPER(REPLACE(REPLACE(LTRIM(RTRIM([Passport Number])),
+        '-',''),' ','')) AS varchar(50)) PERSISTED;
+GO
+CREATE INDEX ix_tgt_ppkey
+    ON [Ankit_STS].[dbo].[sts_master_dedup_v2](pp_key);
+GO
+
+
+
+
+
+
+DROP TABLE IF EXISTS #psrc;
+GO
+SELECT *,
+    CAST(UPPER(REPLACE(REPLACE(LTRIM(RTRIM([Passport_Number])),
+        '-',''),' ','')) AS varchar(50)) AS pp_key
+INTO #psrc
+FROM [Ankit_STS].[s_checks].[Merged_Data]
+WHERE NULLIF(LTRIM(RTRIM([Passport_Number])), '') IS NOT NULL
+  AND LOWER(LTRIM(RTRIM([Passport_Number]))) <> 'null';
+GO
+;WITH d AS (
+    SELECT ROW_NUMBER() OVER (PARTITION BY pp_key ORDER BY (SELECT NULL)) AS rn
+    FROM #psrc
+)
+DELETE FROM d WHERE rn > 1;
+GO
+DELETE FROM #psrc WHERE pp_key IS NULL OR pp_key = '' OR pp_key = 'NULL';
+CREATE CLUSTERED INDEX ix_psrc_ppkey ON #psrc(pp_key);
+GO
+
+
+
+
+
+Step 3 — The UPDATE, joined on the indexed Passport key
+
+
+
+BEGIN TRAN;
+
+UPDATE t
+SET
+    t.[First Name] = CASE
+        WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND t.[First Name] NOT LIKE N'%Unknown%'
+        THEN s.[First_Name] ELSE t.[First Name] END,
+    t.[Middle Name] = CASE
+        WHEN t.[Middle Name] IS NOT NULL AND LTRIM(RTRIM(t.[Middle Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Middle Name]))) <> N'null'
+        THEN s.[Middle_Name] ELSE t.[Middle Name] END,
+    t.[Last Name] = CASE
+        WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND t.[Last Name] NOT LIKE N'%Unknown%'
+        THEN s.[Last_Name] ELSE t.[Last Name] END,
+    t.[Suffix] = CASE
+        WHEN t.[Suffix] IS NOT NULL AND LTRIM(RTRIM(t.[Suffix])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Suffix]))) <> N'null'
+        THEN s.[Suffix] ELSE t.[Suffix] END,
+    t.[Full Date of Birth (MM/DD/YYYY)] = CASE
+        WHEN t.[Full Date of Birth (MM/DD/YYYY)] IS NOT NULL AND LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)]))) <> N'null'
+        THEN s.[Full_Date_of_Birth_MM_DD_YYYY] ELSE t.[Full Date of Birth (MM/DD/YYYY)] END,
+    t.[Tax Identification Number] = CASE
+        WHEN t.[Tax Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Tax Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Tax Identification Number]))) <> N'null'
+        THEN s.[Tax_Identification_Number] ELSE t.[Tax Identification Number] END,
+    t.[Driver's License Number] = CASE
+        WHEN t.[Driver's License Number] IS NOT NULL AND LTRIM(RTRIM(t.[Driver's License Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Driver's License Number]))) <> N'null'
+        THEN s.[Driver_s_License_Number] ELSE t.[Driver's License Number] END,
+    t.[Passport Number] = CASE
+        WHEN t.[Passport Number] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Number]))) <> N'null'
+        THEN s.[Passport_Number] ELSE t.[Passport Number] END,
+    t.[Government-Issued ID Number] = CASE
+        WHEN t.[Government-Issued ID Number] IS NOT NULL AND LTRIM(RTRIM(t.[Government-Issued ID Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government-Issued ID Number]))) <> N'null'
+        THEN s.[Government_Issued_ID_Number] ELSE t.[Government-Issued ID Number] END,
+    t.[Residential Address] = CASE
+        WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null'
+        THEN s.[Residential_Address] ELSE t.[Residential Address] END,
+    t.[City] = CASE
+        WHEN t.[City] IS NOT NULL AND LTRIM(RTRIM(t.[City])) <> N'' AND LOWER(LTRIM(RTRIM(t.[City]))) <> N'null'
+        THEN s.[City] ELSE t.[City] END,
+    t.[State of Residence (if US)] = CASE
+        WHEN t.[State of Residence (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[State of Residence (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[State of Residence (if US)]))) <> N'null'
+        THEN s.[State_of_Residence_if_US] ELSE t.[State of Residence (if US)] END,
+    t.[Province of Residence (if Canada)] = CASE
+        WHEN t.[Province of Residence (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[Province of Residence (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Province of Residence (if Canada)]))) <> N'null'
+        THEN s.[Province_of_Residence_if_Canada] ELSE t.[Province of Residence (if Canada)] END,
+    t.[Zip Code] = CASE
+        WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null'
+        THEN s.[Zip_Code] ELSE t.[Zip Code] END,
+    t.[Country of Residence] = CASE
+        WHEN t.[Country of Residence] IS NOT NULL AND LTRIM(RTRIM(t.[Country of Residence])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Country of Residence]))) <> N'null'
+        THEN s.[Country_of_Residence] ELSE t.[Country of Residence] END,
+    t.[Employee Identification Number] = CASE
+        WHEN t.[Employee Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Employee Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Employee Identification Number]))) <> N'null'
+        THEN s.[Employee_Identification_Number] ELSE t.[Employee Identification Number] END,
+    t.[Phone Number - Personal] = CASE
+        WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null'
+        THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END,
+    t.[Email Address - Personal] = CASE
+        WHEN t.[Email Address - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Email Address - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Email Address - Personal]))) <> N'null'
+        THEN s.[Email_Address_Personal] ELSE t.[Email Address - Personal] END,
+    t.[Work-Related Information] = CASE
+        WHEN t.[Work-Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Work-Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Work-Related Information]))) <> N'null'
+        THEN s.[Work_Related_Information] ELSE t.[Work-Related Information] END,
+    t.[Data Subject Type] = CASE
+        WHEN t.[Data Subject Type] IS NOT NULL AND LTRIM(RTRIM(t.[Data Subject Type])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Data Subject Type]))) <> N'null'
+        THEN s.[Data_Subject_Type] ELSE t.[Data Subject Type] END,
+    t.[Birth Information] = CASE
+        WHEN t.[Birth Information] IS NOT NULL AND LTRIM(RTRIM(t.[Birth Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Birth Information]))) <> N'null'
+        THEN s.[Birth_Information] ELSE t.[Birth Information] END,
+    t.[Address Comments] = CASE
+        WHEN t.[Address Comments] IS NOT NULL AND LTRIM(RTRIM(t.[Address Comments])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Address Comments]))) <> N'null'
+        THEN s.[Address_Comments] ELSE t.[Address Comments] END,
+    t.[Contact Information] = CASE
+        WHEN t.[Contact Information] IS NOT NULL AND LTRIM(RTRIM(t.[Contact Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Contact Information]))) <> N'null'
+        THEN s.[Contact_Information] ELSE t.[Contact Information] END,
+    t.[DL Issuing Country] = CASE
+        WHEN t.[DL Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Country]))) <> N'null'
+        THEN s.[DL_Issuing_Country] ELSE t.[DL Issuing Country] END,
+    t.[DL Issuing Province (if Canada)] = CASE
+        WHEN t.[DL Issuing Province (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Province (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Province (if Canada)]))) <> N'null'
+        THEN s.[DL_Issuing_Province_if_Canada] ELSE t.[DL Issuing Province (if Canada)] END,
+    t.[DL Issuing State (if US)] = CASE
+        WHEN t.[DL Issuing State (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing State (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing State (if US)]))) <> N'null'
+        THEN s.[DL_Issuing_State_if_US] ELSE t.[DL Issuing State (if US)] END,
+    t.[Passport Country] = CASE
+        WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null'
+        THEN s.[Passport_Country] ELSE t.[Passport Country] END,
+    t.[Government ID Issuing Country] = CASE
+        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null'
+        THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END,
+    t.[Government- Issued Identification] = CASE
+        WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null'
+        THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END,
+    t.[Health Related Information] = CASE
+        WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null'
+        THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END,
+    t.[Family Information] = CASE
+        WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null'
+        THEN s.[Family_Information] ELSE t.[Family Information] END,
+    t.[Financial Account Information] = CASE
+        WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null'
+        THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END,
+    t.[Demographic Information] = CASE
+        WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null'
+        THEN s.[Demographic_Information] ELSE t.[Demographic Information] END,
+    t.[Biometric Data] = CASE
+        WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null'
+        THEN s.[Biometric_Data] ELSE t.[Biometric Data] END,
+    t.[PI Notes] = CASE
+        WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null'
+        THEN s.[PI_Notes] ELSE t.[PI Notes] END,
+    t.[Access Credentials (Non-Financial Account)] = CASE
+        WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
+        THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+JOIN #psrc s ON s.pp_key = t.pp_key
+WHERE t.pp_key IS NOT NULL AND t.pp_key <> '' AND t.pp_key <> 'NULL';
+
+SELECT @@ROWCOUNT AS rows_updated;
+-- ROLLBACK TRAN;   /   COMMIT TRAN;
+
+
+Cleanup (after commit + verify)
+
+DROP INDEX ix_tgt_ppkey ON [Ankit_STS].[dbo].[sts_master_dedup_v2];
+GO
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] DROP COLUMN pp_key;
+GO
+DROP TABLE IF EXISTS #psrc;
+
+
+
+Step 1 — Add the indexed TIN key to the TARGET
+
+
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
+    ADD tin_key AS CAST(
+        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Tax Identification Number])),
+        '-',''),' ',''),'.',''),'/',''),'(',''),')','')) AS varchar(50)) PERSISTED;
+GO
+CREATE INDEX ix_tgt_tinkey
+    ON [Ankit_STS].[dbo].[sts_master_dedup_v2](tin_key);
+GO
+
+
+
+DROP TABLE IF EXISTS #tsrc;
+GO
+SELECT *,
+    CAST(UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Tax_Identification_Number])),
+        '-',''),' ',''),'.',''),'/',''),'(',''),')','')) AS varchar(50)) AS tin_key
+INTO #tsrc
+FROM [Ankit_STS].[s_checks].[Merged_Data]
+WHERE NULLIF(LTRIM(RTRIM([Tax_Identification_Number])), '') IS NOT NULL
+  AND LOWER(LTRIM(RTRIM([Tax_Identification_Number]))) <> 'null';
+GO
+;WITH d AS (
+    SELECT ROW_NUMBER() OVER (PARTITION BY tin_key ORDER BY (SELECT NULL)) AS rn
+    FROM #tsrc
+)
+DELETE FROM d WHERE rn > 1;
+GO
+DELETE FROM #tsrc WHERE tin_key IS NULL OR tin_key = '' OR tin_key = 'NULL';
+CREATE CLUSTERED INDEX ix_tsrc_tinkey ON #tsrc(tin_key);
+GO
+
+
+
+Step 3 — The UPDATE, joined on the indexed TIN key
+
+
+
+
+BEGIN TRAN;
+
+UPDATE t
+SET
+    t.[First Name] = CASE
+        WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND t.[First Name] NOT LIKE N'%Unknown%'
+        THEN s.[First_Name] ELSE t.[First Name] END,
+    t.[Middle Name] = CASE
+        WHEN t.[Middle Name] IS NOT NULL AND LTRIM(RTRIM(t.[Middle Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Middle Name]))) <> N'null'
+        THEN s.[Middle_Name] ELSE t.[Middle Name] END,
+    t.[Last Name] = CASE
+        WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND t.[Last Name] NOT LIKE N'%Unknown%'
+        THEN s.[Last_Name] ELSE t.[Last Name] END,
+    t.[Suffix] = CASE
+        WHEN t.[Suffix] IS NOT NULL AND LTRIM(RTRIM(t.[Suffix])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Suffix]))) <> N'null'
+        THEN s.[Suffix] ELSE t.[Suffix] END,
+    t.[Full Date of Birth (MM/DD/YYYY)] = CASE
+        WHEN t.[Full Date of Birth (MM/DD/YYYY)] IS NOT NULL AND LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)]))) <> N'null'
+        THEN s.[Full_Date_of_Birth_MM_DD_YYYY] ELSE t.[Full Date of Birth (MM/DD/YYYY)] END,
+    t.[Tax Identification Number] = CASE
+        WHEN t.[Tax Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Tax Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Tax Identification Number]))) <> N'null'
+        THEN s.[Tax_Identification_Number] ELSE t.[Tax Identification Number] END,
+    t.[Driver's License Number] = CASE
+        WHEN t.[Driver's License Number] IS NOT NULL AND LTRIM(RTRIM(t.[Driver's License Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Driver's License Number]))) <> N'null'
+        THEN s.[Driver_s_License_Number] ELSE t.[Driver's License Number] END,
+    t.[Passport Number] = CASE
+        WHEN t.[Passport Number] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Number]))) <> N'null'
+        THEN s.[Passport_Number] ELSE t.[Passport Number] END,
+    t.[Government-Issued ID Number] = CASE
+        WHEN t.[Government-Issued ID Number] IS NOT NULL AND LTRIM(RTRIM(t.[Government-Issued ID Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government-Issued ID Number]))) <> N'null'
+        THEN s.[Government_Issued_ID_Number] ELSE t.[Government-Issued ID Number] END,
+    t.[Residential Address] = CASE
+        WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null'
+        THEN s.[Residential_Address] ELSE t.[Residential Address] END,
+    t.[City] = CASE
+        WHEN t.[City] IS NOT NULL AND LTRIM(RTRIM(t.[City])) <> N'' AND LOWER(LTRIM(RTRIM(t.[City]))) <> N'null'
+        THEN s.[City] ELSE t.[City] END,
+    t.[State of Residence (if US)] = CASE
+        WHEN t.[State of Residence (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[State of Residence (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[State of Residence (if US)]))) <> N'null'
+        THEN s.[State_of_Residence_if_US] ELSE t.[State of Residence (if US)] END,
+    t.[Province of Residence (if Canada)] = CASE
+        WHEN t.[Province of Residence (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[Province of Residence (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Province of Residence (if Canada)]))) <> N'null'
+        THEN s.[Province_of_Residence_if_Canada] ELSE t.[Province of Residence (if Canada)] END,
+    t.[Zip Code] = CASE
+        WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null'
+        THEN s.[Zip_Code] ELSE t.[Zip Code] END,
+    t.[Country of Residence] = CASE
+        WHEN t.[Country of Residence] IS NOT NULL AND LTRIM(RTRIM(t.[Country of Residence])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Country of Residence]))) <> N'null'
+        THEN s.[Country_of_Residence] ELSE t.[Country of Residence] END,
+    t.[Employee Identification Number] = CASE
+        WHEN t.[Employee Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Employee Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Employee Identification Number]))) <> N'null'
+        THEN s.[Employee_Identification_Number] ELSE t.[Employee Identification Number] END,
+    t.[Phone Number - Personal] = CASE
+        WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null'
+        THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END,
+    t.[Email Address - Personal] = CASE
+        WHEN t.[Email Address - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Email Address - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Email Address - Personal]))) <> N'null'
+        THEN s.[Email_Address_Personal] ELSE t.[Email Address - Personal] END,
+    t.[Work-Related Information] = CASE
+        WHEN t.[Work-Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Work-Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Work-Related Information]))) <> N'null'
+        THEN s.[Work_Related_Information] ELSE t.[Work-Related Information] END,
+    t.[Data Subject Type] = CASE
+        WHEN t.[Data Subject Type] IS NOT NULL AND LTRIM(RTRIM(t.[Data Subject Type])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Data Subject Type]))) <> N'null'
+        THEN s.[Data_Subject_Type] ELSE t.[Data Subject Type] END,
+    t.[Birth Information] = CASE
+        WHEN t.[Birth Information] IS NOT NULL AND LTRIM(RTRIM(t.[Birth Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Birth Information]))) <> N'null'
+        THEN s.[Birth_Information] ELSE t.[Birth Information] END,
+    t.[Address Comments] = CASE
+        WHEN t.[Address Comments] IS NOT NULL AND LTRIM(RTRIM(t.[Address Comments])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Address Comments]))) <> N'null'
+        THEN s.[Address_Comments] ELSE t.[Address Comments] END,
+    t.[Contact Information] = CASE
+        WHEN t.[Contact Information] IS NOT NULL AND LTRIM(RTRIM(t.[Contact Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Contact Information]))) <> N'null'
+        THEN s.[Contact_Information] ELSE t.[Contact Information] END,
+    t.[DL Issuing Country] = CASE
+        WHEN t.[DL Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Country]))) <> N'null'
+        THEN s.[DL_Issuing_Country] ELSE t.[DL Issuing Country] END,
+    t.[DL Issuing Province (if Canada)] = CASE
+        WHEN t.[DL Issuing Province (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Province (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Province (if Canada)]))) <> N'null'
+        THEN s.[DL_Issuing_Province_if_Canada] ELSE t.[DL Issuing Province (if Canada)] END,
+    t.[DL Issuing State (if US)] = CASE
+        WHEN t.[DL Issuing State (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing State (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing State (if US)]))) <> N'null'
+        THEN s.[DL_Issuing_State_if_US] ELSE t.[DL Issuing State (if US)] END,
+    t.[Passport Country] = CASE
+        WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null'
+        THEN s.[Passport_Country] ELSE t.[Passport Country] END,
+    t.[Government ID Issuing Country] = CASE
+        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null'
+        THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END,
+    t.[Government- Issued Identification] = CASE
+        WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null'
+        THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END,
+    t.[Health Related Information] = CASE
+        WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null'
+        THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END,
+    t.[Family Information] = CASE
+        WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null'
+        THEN s.[Family_Information] ELSE t.[Family Information] END,
+    t.[Financial Account Information] = CASE
+        WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null'
+        THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END,
+    t.[Demographic Information] = CASE
+        WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null'
+        THEN s.[Demographic_Information] ELSE t.[Demographic Information] END,
+    t.[Biometric Data] = CASE
+        WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null'
+        THEN s.[Biometric_Data] ELSE t.[Biometric Data] END,
+    t.[PI Notes] = CASE
+        WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null'
+        THEN s.[PI_Notes] ELSE t.[PI Notes] END,
+    t.[Access Credentials (Non-Financial Account)] = CASE
+        WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
+        THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+JOIN #tsrc s ON s.tin_key = t.tin_key
+WHERE t.tin_key IS NOT NULL AND t.tin_key <> '' AND t.tin_key <> 'NULL';
+
+SELECT @@ROWCOUNT AS rows_updated;
+-- ROLLBACK TRAN;   /   COMMIT TRAN;
+
+
+
+Cleanup (after commit + verify)
+
+
+
+DROP INDEX ix_tgt_tinkey ON [Ankit_STS].[dbo].[sts_master_dedup_v2];
+GO
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] DROP COLUMN tin_key;
+GO
+DROP TABLE IF EXISTS #tsrc;
+
+
+
+Step 1 — Add the indexed Gov-ID key to the TARGET
+
+
+
+
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
+    ADD gid_key AS CAST(
+        UPPER(REPLACE(REPLACE(LTRIM(RTRIM([Government-Issued ID Number])),
+        '-',''),' ','')) AS varchar(50)) PERSISTED;
+GO
+CREATE INDEX ix_tgt_gidkey
+    ON [Ankit_STS].[dbo].[sts_master_dedup_v2](gid_key);
+GO
+
+
+
+DROP TABLE IF EXISTS #gsrc;
+GO
+SELECT *,
+    CAST(UPPER(REPLACE(REPLACE(LTRIM(RTRIM([Government_Issued_ID_Number])),
+        '-',''),' ','')) AS varchar(50)) AS gid_key
+INTO #gsrc
+FROM [Ankit_STS].[s_checks].[Merged_Data]
+WHERE NULLIF(LTRIM(RTRIM([Government_Issued_ID_Number])), '') IS NOT NULL
+  AND LOWER(LTRIM(RTRIM([Government_Issued_ID_Number]))) <> 'null';
+GO
+;WITH d AS (
+    SELECT ROW_NUMBER() OVER (PARTITION BY gid_key ORDER BY (SELECT NULL)) AS rn
+    FROM #gsrc
+)
+DELETE FROM d WHERE rn > 1;
+GO
+DELETE FROM #gsrc WHERE gid_key IS NULL OR gid_key = '' OR gid_key = 'NULL';
+CREATE CLUSTERED INDEX ix_gsrc_gidkey ON #gsrc(gid_key);
+GO
+
+
+
+Step 3 — The UPDATE, joined on the indexed Gov-ID key
+
+
+
+BEGIN TRAN;
+
+UPDATE t
+SET
+    t.[First Name] = CASE
+        WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND t.[First Name] NOT LIKE N'%Unknown%'
+        THEN s.[First_Name] ELSE t.[First Name] END,
+    t.[Middle Name] = CASE
+        WHEN t.[Middle Name] IS NOT NULL AND LTRIM(RTRIM(t.[Middle Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Middle Name]))) <> N'null'
+        THEN s.[Middle_Name] ELSE t.[Middle Name] END,
+    t.[Last Name] = CASE
+        WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND t.[Last Name] NOT LIKE N'%Unknown%'
+        THEN s.[Last_Name] ELSE t.[Last Name] END,
+    t.[Suffix] = CASE
+        WHEN t.[Suffix] IS NOT NULL AND LTRIM(RTRIM(t.[Suffix])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Suffix]))) <> N'null'
+        THEN s.[Suffix] ELSE t.[Suffix] END,
+    t.[Full Date of Birth (MM/DD/YYYY)] = CASE
+        WHEN t.[Full Date of Birth (MM/DD/YYYY)] IS NOT NULL AND LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)]))) <> N'null'
+        THEN s.[Full_Date_of_Birth_MM_DD_YYYY] ELSE t.[Full Date of Birth (MM/DD/YYYY)] END,
+    t.[Tax Identification Number] = CASE
+        WHEN t.[Tax Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Tax Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Tax Identification Number]))) <> N'null'
+        THEN s.[Tax_Identification_Number] ELSE t.[Tax Identification Number] END,
+    t.[Driver's License Number] = CASE
+        WHEN t.[Driver's License Number] IS NOT NULL AND LTRIM(RTRIM(t.[Driver's License Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Driver's License Number]))) <> N'null'
+        THEN s.[Driver_s_License_Number] ELSE t.[Driver's License Number] END,
+    t.[Passport Number] = CASE
+        WHEN t.[Passport Number] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Number]))) <> N'null'
+        THEN s.[Passport_Number] ELSE t.[Passport Number] END,
+    t.[Government-Issued ID Number] = CASE
+        WHEN t.[Government-Issued ID Number] IS NOT NULL AND LTRIM(RTRIM(t.[Government-Issued ID Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government-Issued ID Number]))) <> N'null'
+        THEN s.[Government_Issued_ID_Number] ELSE t.[Government-Issued ID Number] END,
+    t.[Residential Address] = CASE
+        WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null'
+        THEN s.[Residential_Address] ELSE t.[Residential Address] END,
+    t.[City] = CASE
+        WHEN t.[City] IS NOT NULL AND LTRIM(RTRIM(t.[City])) <> N'' AND LOWER(LTRIM(RTRIM(t.[City]))) <> N'null'
+        THEN s.[City] ELSE t.[City] END,
+    t.[State of Residence (if US)] = CASE
+        WHEN t.[State of Residence (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[State of Residence (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[State of Residence (if US)]))) <> N'null'
+        THEN s.[State_of_Residence_if_US] ELSE t.[State of Residence (if US)] END,
+    t.[Province of Residence (if Canada)] = CASE
+        WHEN t.[Province of Residence (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[Province of Residence (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Province of Residence (if Canada)]))) <> N'null'
+        THEN s.[Province_of_Residence_if_Canada] ELSE t.[Province of Residence (if Canada)] END,
+    t.[Zip Code] = CASE
+        WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null'
+        THEN s.[Zip_Code] ELSE t.[Zip Code] END,
+    t.[Country of Residence] = CASE
+        WHEN t.[Country of Residence] IS NOT NULL AND LTRIM(RTRIM(t.[Country of Residence])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Country of Residence]))) <> N'null'
+        THEN s.[Country_of_Residence] ELSE t.[Country of Residence] END,
+    t.[Employee Identification Number] = CASE
+        WHEN t.[Employee Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Employee Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Employee Identification Number]))) <> N'null'
+        THEN s.[Employee_Identification_Number] ELSE t.[Employee Identification Number] END,
+    t.[Phone Number - Personal] = CASE
+        WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null'
+        THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END,
+    t.[Email Address - Personal] = CASE
+        WHEN t.[Email Address - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Email Address - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Email Address - Personal]))) <> N'null'
+        THEN s.[Email_Address_Personal] ELSE t.[Email Address - Personal] END,
+    t.[Work-Related Information] = CASE
+        WHEN t.[Work-Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Work-Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Work-Related Information]))) <> N'null'
+        THEN s.[Work_Related_Information] ELSE t.[Work-Related Information] END,
+    t.[Data Subject Type] = CASE
+        WHEN t.[Data Subject Type] IS NOT NULL AND LTRIM(RTRIM(t.[Data Subject Type])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Data Subject Type]))) <> N'null'
+        THEN s.[Data_Subject_Type] ELSE t.[Data Subject Type] END,
+    t.[Birth Information] = CASE
+        WHEN t.[Birth Information] IS NOT NULL AND LTRIM(RTRIM(t.[Birth Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Birth Information]))) <> N'null'
+        THEN s.[Birth_Information] ELSE t.[Birth Information] END,
+    t.[Address Comments] = CASE
+        WHEN t.[Address Comments] IS NOT NULL AND LTRIM(RTRIM(t.[Address Comments])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Address Comments]))) <> N'null'
+        THEN s.[Address_Comments] ELSE t.[Address Comments] END,
+    t.[Contact Information] = CASE
+        WHEN t.[Contact Information] IS NOT NULL AND LTRIM(RTRIM(t.[Contact Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Contact Information]))) <> N'null'
+        THEN s.[Contact_Information] ELSE t.[Contact Information] END,
+    t.[DL Issuing Country] = CASE
+        WHEN t.[DL Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Country]))) <> N'null'
+        THEN s.[DL_Issuing_Country] ELSE t.[DL Issuing Country] END,
+    t.[DL Issuing Province (if Canada)] = CASE
+        WHEN t.[DL Issuing Province (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Province (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Province (if Canada)]))) <> N'null'
+        THEN s.[DL_Issuing_Province_if_Canada] ELSE t.[DL Issuing Province (if Canada)] END,
+    t.[DL Issuing State (if US)] = CASE
+        WHEN t.[DL Issuing State (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing State (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing State (if US)]))) <> N'null'
+        THEN s.[DL_Issuing_State_if_US] ELSE t.[DL Issuing State (if US)] END,
+    t.[Passport Country] = CASE
+        WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null'
+        THEN s.[Passport_Country] ELSE t.[Passport Country] END,
+    t.[Government ID Issuing Country] = CASE
+        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null'
+        THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END,
+    t.[Government- Issued Identification] = CASE
+        WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null'
+        THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END,
+    t.[Health Related Information] = CASE
+        WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null'
+        THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END,
+    t.[Family Information] = CASE
+        WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null'
+        THEN s.[Family_Information] ELSE t.[Family Information] END,
+    t.[Financial Account Information] = CASE
+        WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null'
+        THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END,
+    t.[Demographic Information] = CASE
+        WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null'
+        THEN s.[Demographic_Information] ELSE t.[Demographic Information] END,
+    t.[Biometric Data] = CASE
+        WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null'
+        THEN s.[Biometric_Data] ELSE t.[Biometric Data] END,
+    t.[PI Notes] = CASE
+        WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null'
+        THEN s.[PI_Notes] ELSE t.[PI Notes] END,
+    t.[Access Credentials (Non-Financial Account)] = CASE
+        WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
+        THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+JOIN #gsrc s ON s.gid_key = t.gid_key
+WHERE t.gid_key IS NOT NULL AND t.gid_key <> '' AND t.gid_key <> 'NULL';
+
+SELECT @@ROWCOUNT AS rows_updated;
+-- ROLLBACK TRAN;   /   COMMIT TRAN;
+
+
+
+Cleanup (after commit + verify)
+
+
+
+
+DROP INDEX ix_tgt_gidkey ON [Ankit_STS].[dbo].[sts_master_dedup_v2];
+GO
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] DROP COLUMN gid_key;
+GO
+DROP TABLE IF EXISTS #gsrc;
+
+
+
+
+
