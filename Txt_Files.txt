@@ -175,10 +175,19 @@ CREATE CLUSTERED INDEX ix_src_key ON #src(ssn_key);
 ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
     ADD ssn_key AS CAST(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Social Security Number])),
         '-',''),' ',''),'.',''),'/','') AS varchar(30)) PERSISTED;
+GO
+
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
+    ADD _done bit NOT NULL DEFAULT 0;
+GO
+
 CREATE INDEX ix_tgt_key ON [Ankit_STS].[dbo].[sts_master_dedup_v2](ssn_key)
-    WHERE ssn_key <> '';    -- filtered: skips blank-SSN rows
-ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] ADD _done bit NOT NULL DEFAULT 0;
-CREATE INDEX ix_tgt_done ON [Ankit_STS].[dbo].[sts_master_dedup_v2](_done) WHERE _done = 0;
+    WHERE ssn_key <> '';
+GO
+
+CREATE INDEX ix_tgt_done ON [Ankit_STS].[dbo].[sts_master_dedup_v2](_done)
+    WHERE _done = 0;
+GO;
 
 
 
