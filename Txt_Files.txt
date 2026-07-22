@@ -153,6 +153,62 @@ ORDER BY v.zip_k, v.state_k;
 
 
 
+-- 1) Deduplicated, indexed source: one row per SSN, key cast to a small indexable type
+DROP TABLE IF EXISTS #src;
+SELECT x.*,
+       CAST(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Social_Security_Number])),
+            '-',''),' ',''),'.',''),'/','') AS varchar(30)) AS ssn_key
+INTO #src
+FROM (
+    SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Social_Security_Number])),
+            '-',''),' ',''),'.',''),'/','')
+        ORDER BY (SELECT NULL)) AS rn
+    FROM [Ankit_STS].[s_checks].[SSN_Based]
+    WHERE NULLIF(LTRIM(RTRIM([Social_Security_Number])), '') IS NOT NULL
+      AND LOWER(LTRIM(RTRIM([Social_Security_Number]))) <> 'null'
+) x
+WHERE x.rn = 1;
+CREATE CLUSTERED INDEX ix_src_key ON #src(ssn_key);
+
+-- 2) Indexed normalized key + a batch flag on the target (one-time)
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2]
+    ADD ssn_key AS CAST(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM([Social Security Number])),
+        '-',''),' ',''),'.',''),'/','') AS varchar(30)) PERSISTED;
+CREATE INDEX ix_tgt_key ON [Ankit_STS].[dbo].[sts_master_dedup_v2](ssn_key)
+    WHERE ssn_key <> '';    -- filtered: skips blank-SSN rows
+ALTER TABLE [Ankit_STS].[dbo].[sts_master_dedup_v2] ADD _done bit NOT NULL DEFAULT 0;
+CREATE INDEX ix_tgt_done ON [Ankit_STS].[dbo].[sts_master_dedup_v2](_done) WHERE _done = 0;
+
+
+
+
+
+DECLARE @batch int = 50000, @rows int = 1;
+
+WHILE @rows > 0
+BEGIN
+    UPDATE TOP (@batch) t
+    SET
+        /* ▼▼▼  PASTE THE EXACT 36-COLUMN "CASE ... END" SET BLOCK
+                FROM MY PREVIOUS MESSAGE HERE (unchanged)  ▼▼▼ */
+        t.[First Name] = CASE
+            WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null'
+            THEN s.[First_Name] ELSE t.[First Name] END,
+        -- ... (the other 35 columns, identical to the version you confirmed) ...
+        t.[Access Credentials (Non-Financial Account)] = CASE
+            WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
+            THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END,
+        /* ▲▲▲  end of pasted SET block  ▲▲▲ */
+        t._done = 1
+    FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+    JOIN #src s ON s.ssn_key = t.ssn_key
+    WHERE t._done = 0
+      AND t.ssn_key <> '';
+
+    SET @rows = @@ROWCOUNT;
+    -- optional: CHECKPOINT;  -- if DB is in SIMPLE recovery, helps reclaim log between batches
+END
 
 
 
@@ -160,98 +216,10 @@ ORDER BY v.zip_k, v.state_k;
 
 
 
-SELECT TOP (1000) [First_Name]
-      ,[Middle_Name]
-      ,[Last_Name]
-      ,[Suffix]
-      ,[Social_Security_Number]
-      ,[Full_Date_of_Birth_MM_DD_YYYY]
-      ,[Tax_Identification_Number]
-      ,[Driver_s_License_Number]
-      ,[Passport_Number]
-      ,[Government_Issued_ID_Number]
-      ,[Residential_Address]
-      ,[City]
-      ,[State_of_Residence_if_US]
-      ,[Province_of_Residence_if_Canada]
-      ,[Zip_Code]
-      ,[Country_of_Residence]
-      ,[Other_Address]
-      ,[Employee_Identification_Number]
-      ,[Phone_Number]
-      ,[Email_Address_Personal]
-      ,[Work_Related_Information]
-      ,[Data_Subject_Type]
-      ,[Birth_Information]
-      ,[Address_Comments]
-      ,[Contact_Information]
-      ,[DL_Issuing_Country]
-      ,[DL_Issuing_Province_if_Canada]
-      ,[DL_Issuing_State_if_US]
-      ,[Passport_Country]
-      ,[Government_ID_Issuing_Country]
-      ,[Government_Issued_Identification]
-      ,[Health_Related_Information]
-      ,[Family_Information]
-      ,[Financial_Account_Information]
-      ,[Demographic_Information]
-      ,[Biometric_Data]
-      ,[PI_Notes]
-      ,[Access_Credentials_Non_Financial_Account]
-      ,[Student_Related_Information]
-  FROM [Ankit_STS].[s_checks].[SSN_Based]
-
-
-
-
-
-
-
-
-
-
-SELECT TOP (1000) [DOCIDs]
-      ,[First Name]
-      ,[Middle Name]
-      ,[Last Name]
-      ,[Suffix]
-      ,[Data Subject Type]
-      ,[Residential Address]
-      ,[City]
-      ,[State of Residence (if US)]
-      ,[Province of Residence (if Canada)]
-      ,[Zip Code]
-      ,[Country of Residence]
-      ,[Email Address - Personal]
-      ,[Phone Number - Personal]
-      ,[Contact Information]
-      ,[Address Comments]
-      ,[Full Date of Birth (MM/DD/YYYY)]
-      ,[Birth Information]
-      ,[Social Security Number]
-      ,[Tax Identification Number]
-      ,[Government- Issued Identification]
-      ,[Government-Issued ID Number]
-      ,[Government ID Issuing Country]
-      ,[Driver's License Number]
-      ,[DL Issuing Country]
-      ,[DL Issuing State (if US)]
-      ,[DL Issuing Province (if Canada)]
-      ,[Passport Number]
-      ,[Passport Country]
-      ,[Family Information]
-      ,[Access Credentials (Non-Financial Account)]
-      ,[Financial Account Information]
-      ,[Employee Identification Number]
-      ,[Work-Related Information]
-      ,[Biometric Data]
-      ,[Health Related Information]
-      ,[Demographic Information]
-      ,[PI Notes]
-      ,[DOBs]
-      ,[Unique_ID]
-      ,[Unique_id_New]
-      ,[Unique_id_names]
-      ,[Phone_Number_Backup]
-  FROM [Ankit_STS].[dbo].[sts_master_dedup_v2]
+-- inspect a sample of updated rows
+SELECT TOP (200) t.[Social Security Number], t.[First Name], t.[Last Name],
+       t.[Residential Address], t.[Zip Code], t.[Full Date of Birth (MM/DD/YYYY)]
+FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+WHERE t._done = 1
+ORDER BY t.[Social Security Number];
 
