@@ -456,3 +456,83 @@ WHERE tk.ssn_key <> '';
 
 SELECT @@ROWCOUNT AS rows_updated;
 -- ROLLBACK TRAN;   /  COMMIT TRAN;
+
+
+
+
+
+
+Select Statment
+
+
+DROP TABLE IF EXISTS #src;
+SELECT *
+INTO #src
+FROM (
+    SELECT s0.*,
+        STUFF((SELECT '' + SUBSTRING(s0.[Social_Security_Number], v.number, 1)
+               FROM master..spt_values v
+               WHERE v.type = 'P' AND v.number BETWEEN 1 AND LEN(s0.[Social_Security_Number])
+                 AND SUBSTRING(s0.[Social_Security_Number], v.number, 1) LIKE '[0-9]'
+               FOR XML PATH('')), 1, 0, '') AS ssn_key
+    FROM [Ankit_STS].[s_checks].[SSN_Based] s0
+    WHERE NULLIF(LTRIM(RTRIM(s0.[Social_Security_Number])), '') IS NOT NULL
+) z
+WHERE z.ssn_key <> '';
+;WITH d AS (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY ssn_key ORDER BY (SELECT NULL)) AS rn FROM #src
+)
+DELETE FROM d WHERE rn > 1;
+
+SELECT x.[Social Security Number], x.column_name, x.old_value, x.new_value
+FROM (
+    SELECT t.[Social Security Number], v.column_name, v.old_value, v.new_value
+    FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
+    CROSS APPLY (SELECT STUFF((SELECT '' + SUBSTRING(t.[Social Security Number], n.number, 1)
+                               FROM master..spt_values n
+                               WHERE n.type = 'P' AND n.number BETWEEN 1 AND LEN(t.[Social Security Number])
+                                 AND SUBSTRING(t.[Social Security Number], n.number, 1) LIKE '[0-9]'
+                               FOR XML PATH('')), 1, 0, '') AS ssn_key) tk
+    JOIN #src s ON s.ssn_key = tk.ssn_key
+    CROSS APPLY (VALUES
+        (N'First Name', CAST(t.[First Name] AS nvarchar(max)), CAST(CASE WHEN t.[First Name] IS NOT NULL AND LTRIM(RTRIM(t.[First Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[First Name]))) <> N'null' AND t.[First Name] NOT LIKE N'%Unknown%' THEN s.[First_Name] ELSE t.[First Name] END AS nvarchar(max))),
+        (N'Middle Name', CAST(t.[Middle Name] AS nvarchar(max)), CAST(CASE WHEN t.[Middle Name] IS NOT NULL AND LTRIM(RTRIM(t.[Middle Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Middle Name]))) <> N'null' THEN s.[Middle_Name] ELSE t.[Middle Name] END AS nvarchar(max))),
+        (N'Last Name', CAST(t.[Last Name] AS nvarchar(max)), CAST(CASE WHEN t.[Last Name] IS NOT NULL AND LTRIM(RTRIM(t.[Last Name])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Last Name]))) <> N'null' AND t.[Last Name] NOT LIKE N'%Unknown%' THEN s.[Last_Name] ELSE t.[Last Name] END AS nvarchar(max))),
+        (N'Suffix', CAST(t.[Suffix] AS nvarchar(max)), CAST(CASE WHEN t.[Suffix] IS NOT NULL AND LTRIM(RTRIM(t.[Suffix])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Suffix]))) <> N'null' THEN s.[Suffix] ELSE t.[Suffix] END AS nvarchar(max))),
+        (N'Full Date of Birth (MM/DD/YYYY)', CAST(t.[Full Date of Birth (MM/DD/YYYY)] AS nvarchar(max)), CAST(CASE WHEN t.[Full Date of Birth (MM/DD/YYYY)] IS NOT NULL AND LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Full Date of Birth (MM/DD/YYYY)]))) <> N'null' THEN s.[Full_Date_of_Birth_MM_DD_YYYY] ELSE t.[Full Date of Birth (MM/DD/YYYY)] END AS nvarchar(max))),
+        (N'Tax Identification Number', CAST(t.[Tax Identification Number] AS nvarchar(max)), CAST(CASE WHEN t.[Tax Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Tax Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Tax Identification Number]))) <> N'null' THEN s.[Tax_Identification_Number] ELSE t.[Tax Identification Number] END AS nvarchar(max))),
+        (N'Driver''s License Number', CAST(t.[Driver's License Number] AS nvarchar(max)), CAST(CASE WHEN t.[Driver's License Number] IS NOT NULL AND LTRIM(RTRIM(t.[Driver's License Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Driver's License Number]))) <> N'null' THEN s.[Driver_s_License_Number] ELSE t.[Driver's License Number] END AS nvarchar(max))),
+        (N'Passport Number', CAST(t.[Passport Number] AS nvarchar(max)), CAST(CASE WHEN t.[Passport Number] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Number]))) <> N'null' THEN s.[Passport_Number] ELSE t.[Passport Number] END AS nvarchar(max))),
+        (N'Government-Issued ID Number', CAST(t.[Government-Issued ID Number] AS nvarchar(max)), CAST(CASE WHEN t.[Government-Issued ID Number] IS NOT NULL AND LTRIM(RTRIM(t.[Government-Issued ID Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government-Issued ID Number]))) <> N'null' THEN s.[Government_Issued_ID_Number] ELSE t.[Government-Issued ID Number] END AS nvarchar(max))),
+        (N'Residential Address', CAST(t.[Residential Address] AS nvarchar(max)), CAST(CASE WHEN t.[Residential Address] IS NOT NULL AND LTRIM(RTRIM(t.[Residential Address])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Residential Address]))) <> N'null' THEN s.[Residential_Address] ELSE t.[Residential Address] END AS nvarchar(max))),
+        (N'City', CAST(t.[City] AS nvarchar(max)), CAST(CASE WHEN t.[City] IS NOT NULL AND LTRIM(RTRIM(t.[City])) <> N'' AND LOWER(LTRIM(RTRIM(t.[City]))) <> N'null' THEN s.[City] ELSE t.[City] END AS nvarchar(max))),
+        (N'State of Residence (if US)', CAST(t.[State of Residence (if US)] AS nvarchar(max)), CAST(CASE WHEN t.[State of Residence (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[State of Residence (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[State of Residence (if US)]))) <> N'null' THEN s.[State_of_Residence_if_US] ELSE t.[State of Residence (if US)] END AS nvarchar(max))),
+        (N'Province of Residence (if Canada)', CAST(t.[Province of Residence (if Canada)] AS nvarchar(max)), CAST(CASE WHEN t.[Province of Residence (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[Province of Residence (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Province of Residence (if Canada)]))) <> N'null' THEN s.[Province_of_Residence_if_Canada] ELSE t.[Province of Residence (if Canada)] END AS nvarchar(max))),
+        (N'Zip Code', CAST(t.[Zip Code] AS nvarchar(max)), CAST(CASE WHEN t.[Zip Code] IS NOT NULL AND LTRIM(RTRIM(t.[Zip Code])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Zip Code]))) <> N'null' THEN s.[Zip_Code] ELSE t.[Zip Code] END AS nvarchar(max))),
+        (N'Country of Residence', CAST(t.[Country of Residence] AS nvarchar(max)), CAST(CASE WHEN t.[Country of Residence] IS NOT NULL AND LTRIM(RTRIM(t.[Country of Residence])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Country of Residence]))) <> N'null' THEN s.[Country_of_Residence] ELSE t.[Country of Residence] END AS nvarchar(max))),
+        (N'Employee Identification Number', CAST(t.[Employee Identification Number] AS nvarchar(max)), CAST(CASE WHEN t.[Employee Identification Number] IS NOT NULL AND LTRIM(RTRIM(t.[Employee Identification Number])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Employee Identification Number]))) <> N'null' THEN s.[Employee_Identification_Number] ELSE t.[Employee Identification Number] END AS nvarchar(max))),
+        (N'Phone Number - Personal', CAST(t.[Phone Number - Personal] AS nvarchar(max)), CAST(CASE WHEN t.[Phone Number - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Phone Number - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Phone Number - Personal]))) <> N'null' THEN s.[Phone_Number] ELSE t.[Phone Number - Personal] END AS nvarchar(max))),
+        (N'Email Address - Personal', CAST(t.[Email Address - Personal] AS nvarchar(max)), CAST(CASE WHEN t.[Email Address - Personal] IS NOT NULL AND LTRIM(RTRIM(t.[Email Address - Personal])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Email Address - Personal]))) <> N'null' THEN s.[Email_Address_Personal] ELSE t.[Email Address - Personal] END AS nvarchar(max))),
+        (N'Work-Related Information', CAST(t.[Work-Related Information] AS nvarchar(max)), CAST(CASE WHEN t.[Work-Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Work-Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Work-Related Information]))) <> N'null' THEN s.[Work_Related_Information] ELSE t.[Work-Related Information] END AS nvarchar(max))),
+        (N'Data Subject Type', CAST(t.[Data Subject Type] AS nvarchar(max)), CAST(CASE WHEN t.[Data Subject Type] IS NOT NULL AND LTRIM(RTRIM(t.[Data Subject Type])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Data Subject Type]))) <> N'null' THEN s.[Data_Subject_Type] ELSE t.[Data Subject Type] END AS nvarchar(max))),
+        (N'Birth Information', CAST(t.[Birth Information] AS nvarchar(max)), CAST(CASE WHEN t.[Birth Information] IS NOT NULL AND LTRIM(RTRIM(t.[Birth Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Birth Information]))) <> N'null' THEN s.[Birth_Information] ELSE t.[Birth Information] END AS nvarchar(max))),
+        (N'Address Comments', CAST(t.[Address Comments] AS nvarchar(max)), CAST(CASE WHEN t.[Address Comments] IS NOT NULL AND LTRIM(RTRIM(t.[Address Comments])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Address Comments]))) <> N'null' THEN s.[Address_Comments] ELSE t.[Address Comments] END AS nvarchar(max))),
+        (N'Contact Information', CAST(t.[Contact Information] AS nvarchar(max)), CAST(CASE WHEN t.[Contact Information] IS NOT NULL AND LTRIM(RTRIM(t.[Contact Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Contact Information]))) <> N'null' THEN s.[Contact_Information] ELSE t.[Contact Information] END AS nvarchar(max))),
+        (N'DL Issuing Country', CAST(t.[DL Issuing Country] AS nvarchar(max)), CAST(CASE WHEN t.[DL Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Country]))) <> N'null' THEN s.[DL_Issuing_Country] ELSE t.[DL Issuing Country] END AS nvarchar(max))),
+        (N'DL Issuing Province (if Canada)', CAST(t.[DL Issuing Province (if Canada)] AS nvarchar(max)), CAST(CASE WHEN t.[DL Issuing Province (if Canada)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing Province (if Canada)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing Province (if Canada)]))) <> N'null' THEN s.[DL_Issuing_Province_if_Canada] ELSE t.[DL Issuing Province (if Canada)] END AS nvarchar(max))),
+        (N'DL Issuing State (if US)', CAST(t.[DL Issuing State (if US)] AS nvarchar(max)), CAST(CASE WHEN t.[DL Issuing State (if US)] IS NOT NULL AND LTRIM(RTRIM(t.[DL Issuing State (if US)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[DL Issuing State (if US)]))) <> N'null' THEN s.[DL_Issuing_State_if_US] ELSE t.[DL Issuing State (if US)] END AS nvarchar(max))),
+        (N'Passport Country', CAST(t.[Passport Country] AS nvarchar(max)), CAST(CASE WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null' THEN s.[Passport_Country] ELSE t.[Passport Country] END AS nvarchar(max))),
+        (N'Government ID Issuing Country', CAST(t.[Government ID Issuing Country] AS nvarchar(max)), CAST(CASE WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null' THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END AS nvarchar(max))),
+        (N'Government- Issued Identification', CAST(t.[Government- Issued Identification] AS nvarchar(max)), CAST(CASE WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null' THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END AS nvarchar(max))),
+        (N'Health Related Information', CAST(t.[Health Related Information] AS nvarchar(max)), CAST(CASE WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null' THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END AS nvarchar(max))),
+        (N'Family Information', CAST(t.[Family Information] AS nvarchar(max)), CAST(CASE WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null' THEN s.[Family_Information] ELSE t.[Family Information] END AS nvarchar(max))),
+        (N'Financial Account Information', CAST(t.[Financial Account Information] AS nvarchar(max)), CAST(CASE WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null' THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END AS nvarchar(max))),
+        (N'Demographic Information', CAST(t.[Demographic Information] AS nvarchar(max)), CAST(CASE WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null' THEN s.[Demographic_Information] ELSE t.[Demographic Information] END AS nvarchar(max))),
+        (N'Biometric Data', CAST(t.[Biometric Data] AS nvarchar(max)), CAST(CASE WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null' THEN s.[Biometric_Data] ELSE t.[Biometric Data] END AS nvarchar(max))),
+        (N'PI Notes', CAST(t.[PI Notes] AS nvarchar(max)), CAST(CASE WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null' THEN s.[PI_Notes] ELSE t.[PI Notes] END AS nvarchar(max))),
+        (N'Access Credentials (Non-Financial Account)', CAST(t.[Access Credentials (Non-Financial Account)] AS nvarchar(max)), CAST(CASE WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null' THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END AS nvarchar(max)))
+    ) AS v(column_name, old_value, new_value)
+    WHERE tk.ssn_key <> ''
+) AS x
+WHERE ISNULL(x.old_value, N'') <> ISNULL(x.new_value, N'')
+ORDER BY x.[Social Security Number], x.column_name;
