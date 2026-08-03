@@ -20,6 +20,12 @@ default combiner for any mix of sheet layouts.
   3. "Source File" and "Source Sheet" columns are added to every row so
      it can be traced back to its original workbook and worksheet.
 
+  4. Any sheet whose header row is exactly {Md Rc, Loc Name, Res Name,
+     Appt Dt, Pat Name, Per Nbr, Sts} (case-insensitive, regardless of
+     sheet name) is treated specially: it is deduplicated per
+     Md Rc + Pat Name + Per Nbr, keeping only the row with the latest
+     Appt Dt in each group.
+
 Output: combined.xlsx in the destination file you choose, with every
 sheet's rows stacked into one "Combined" sheet.
 
@@ -39,6 +45,13 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 COMBINED_FILENAME = "combined.xlsx"
 SOURCE_COLUMN = "Source File"
 SOURCE_SHEET_COLUMN = "Source Sheet"
+
+# A sheet whose header row matches this set exactly (case-insensitive,
+# any order) is deduplicated - one row per Md Rc + Pat Name + Per Nbr,
+# keeping only the row with the latest Appt Dt in each group.
+DEDUP_HEADERS = {"Md Rc", "Loc Name", "Res Name", "Appt Dt", "Pat Name", "Per Nbr", "Sts"}
+DEDUP_GROUP_COLUMNS = ["Md Rc", "Pat Name", "Per Nbr"]
+DEDUP_DATE_COLUMN = "Appt Dt"
 
 
 # --------------------------------------------------------------------------
@@ -62,6 +75,29 @@ def clean_header_names(columns):
             seen[name] = 0
         headers.append(name)
     return headers
+
+
+# --------------------------------------------------------------------------
+# Dedup sheet detection
+# --------------------------------------------------------------------------
+
+def is_dedup_target(columns):
+    """True if a sheet's (cleaned) header row is exactly the dedup
+    header set, case-insensitive and regardless of order."""
+    return {str(c).strip().lower() for c in columns} == {h.lower() for h in DEDUP_HEADERS}
+
+
+def dedup_sheet(data):
+    """Keep one row per Md Rc + Pat Name + Per Nbr, the one with the
+    latest Appt Dt in that group. Unparseable/blank dates sort first so
+    a real date always wins; if a group has no parseable date at all,
+    its last original row is kept."""
+    working = data.copy()
+    working["_dedup_date"] = pd.to_datetime(working[DEDUP_DATE_COLUMN], errors="coerce")
+    working.sort_values("_dedup_date", ascending=True, na_position="first",
+                         kind="stable", inplace=True)
+    deduped = working.drop_duplicates(subset=DEDUP_GROUP_COLUMNS, keep="last")
+    return deduped.drop(columns="_dedup_date").sort_index()
 
 
 # --------------------------------------------------------------------------
@@ -126,6 +162,13 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
             if data.empty:
                 log(f"  - {filename} [{sheet_name}]: empty sheet, skipped")
                 continue
+
+            if is_dedup_target(data.columns):
+                before = len(data)
+                data = dedup_sheet(data)
+                log(f"  * {filename} [{sheet_name}]: dedup sheet detected - "
+                    f"{before} -> {len(data)} row(s) after keeping latest "
+                    f"Appt Dt per Md Rc/Pat Name/Per Nbr")
 
             new_cols = [c for c in data.columns if c not in known_set]
             for c in new_cols:
