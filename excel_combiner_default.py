@@ -21,17 +21,23 @@ default combiner for any mix of sheet layouts.
      it can be traced back to its original workbook and worksheet.
 
 Output: combined.xlsx in the destination file you choose, with every
-sheet's rows stacked into one "Combined" sheet.
+sheet's rows stacked into one "Combined" sheet. If the combined data
+exceeds Excel's ~1,048,575 data-row limit, the output is automatically
+split across multiple workbooks (combined_part1.xlsx, combined_part2.xlsx,
+...) instead of failing.
 
 A small Tkinter GUI lets you pick the source folder and the output file,
 with a progress bar tracking sheets processed.
 """
 
+import math
 import os
 import threading
+import time
 import traceback
 
 import pandas as pd
+from openpyxl import Workbook
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -39,6 +45,14 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 COMBINED_FILENAME = "combined.xlsx"
 SOURCE_COLUMN = "Source File"
 SOURCE_SHEET_COLUMN = "Source Sheet"
+
+# Excel's hard per-sheet row cap (1,048,576), minus 1 for the header row.
+EXCEL_MAX_DATA_ROWS = 1_048_576 - 1
+
+# How often (in rows) to push a progress/status update while writing the
+# output workbook - frequent enough that the UI never looks frozen, coarse
+# enough that it doesn't flood the Tk event loop on very large datasets.
+WRITE_PROGRESS_STEP = 2_000
 
 
 # --------------------------------------------------------------------------
@@ -127,6 +141,13 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
                 log(f"  - {filename} [{sheet_name}]: empty sheet, skipped")
                 continue
 
+            before_dedup = len(data)
+            data.drop_duplicates(inplace=True)
+            dupes_removed = before_dedup - len(data)
+            if data.empty:
+                log(f"  - {filename} [{sheet_name}]: empty sheet, skipped")
+                continue
+
             new_cols = [c for c in data.columns if c not in known_set]
             for c in new_cols:
                 known_set.add(c)
@@ -135,11 +156,12 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
             data.insert(0, SOURCE_SHEET_COLUMN, sheet_name)
             data.insert(0, SOURCE_COLUMN, filename)
 
+            dupe_note = f", {dupes_removed} duplicate(s) removed" if dupes_removed else ""
             if new_cols:
-                log(f"  - {filename} [{sheet_name}]: {len(data)} row(s), "
+                log(f"  - {filename} [{sheet_name}]: {len(data)} row(s){dupe_note}, "
                     f"{len(data.columns) - 2} column(s), {len(new_cols)} new -> {new_cols}")
             else:
-                log(f"  - {filename} [{sheet_name}]: {len(data)} row(s), "
+                log(f"  - {filename} [{sheet_name}]: {len(data)} row(s){dupe_note}, "
                     f"{len(data.columns) - 2} column(s), no new columns")
 
             frames.append(data)
@@ -154,14 +176,68 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
     column_order = [SOURCE_COLUMN, SOURCE_SHEET_COLUMN] + known_columns
     combined = combined[column_order]
 
-    _status("Writing output workbook...")
-    combined.to_excel(dest_path, index=False, sheet_name="Combined")
+    total_rows = len(combined)
+    total_cols = len(combined.columns)
+    log(f"Combining complete: {total_rows:,} record(s) found across "
+        f"{total_cols:,} column(s). Preparing to write output...")
 
-    progress(total_files, total_files)
+    num_parts = math.ceil(total_rows / EXCEL_MAX_DATA_ROWS) if total_rows else 1
+    base, ext = os.path.splitext(dest_path)
+    ext = ext or ".xlsx"
+    if num_parts > 1:
+        log(f"{total_rows:,} rows exceed Excel's per-sheet limit of "
+            f"{EXCEL_MAX_DATA_ROWS:,}; splitting output into {num_parts} files.")
+
+    # Vectorized NaN -> None over the whole array (one C-level call) instead
+    # of calling pd.isna() per cell in the write loop - this is the biggest
+    # remaining lever on very large datasets.
+    _status("Preparing data for write...")
+    header = list(combined.columns)
+    values = combined.to_numpy(dtype=object)
+    nan_mask = pd.isna(values)
+    if nan_mask.any():
+        values[nan_mask] = None
+
+    _status(f"Writing output workbook... 0 / {total_rows:,} rows")
+    progress(0, max(total_rows, 1))
+
+    written_total = 0
+    start_time = time.time()
+    output_paths = []
+
+    try:
+        for part_num in range(1, num_parts + 1):
+            part_path = f"{base}_part{part_num}{ext}" if num_parts > 1 else dest_path
+            part_start = (part_num - 1) * EXCEL_MAX_DATA_ROWS
+            part_end = min(part_start + EXCEL_MAX_DATA_ROWS, total_rows)
+
+            wb = Workbook(write_only=True)
+            ws = wb.create_sheet("Combined")
+            ws.append(header)
+
+            for row in values[part_start:part_end].tolist():
+                ws.append(row)
+                written_total += 1
+                if written_total % WRITE_PROGRESS_STEP == 0 or written_total == total_rows:
+                    elapsed = time.time() - start_time
+                    progress(written_total, total_rows)
+                    _status(
+                        f"Writing output workbook {part_num}/{num_parts}... "
+                        f"{written_total:,} / {total_rows:,} rows "
+                        f"({elapsed:.0f}s elapsed)"
+                    )
+
+            _status(f"Saving {part_path}...")
+            wb.save(part_path)
+            output_paths.append(part_path)
+    except Exception as exc:
+        raise RuntimeError(f"Failed while writing output workbook: {exc}") from exc
+
     _status("Done.")
     log(f"Combined {len(frames)} sheet(s) across {total_files} file(s), "
-        f"{len(combined)} row(s), {len(known_columns)} data column(s) -> {dest_path}")
-    return dest_path
+        f"{total_rows:,} row(s), {len(known_columns)} data column(s) -> "
+        f"{', '.join(output_paths)}")
+    return output_paths
 
 
 # --------------------------------------------------------------------------
@@ -263,10 +339,16 @@ class CombinerApp:
 
     def _run_worker(self, source, dest):
         try:
-            dest_path = combine_files(source, dest, self.log, self.progress, status=self.status)
-            self.root.after(0, lambda: messagebox.showinfo(
-                "Done", f"Combination complete.\nSaved to:\n{dest_path}"
-            ))
+            output_paths = combine_files(source, dest, self.log, self.progress, status=self.status)
+            if len(output_paths) == 1:
+                msg = f"Combination complete.\nSaved to:\n{output_paths[0]}"
+            else:
+                msg = (
+                    f"Combination complete. Output exceeded Excel's row limit, "
+                    f"so it was split into {len(output_paths)} files:\n"
+                    + "\n".join(output_paths)
+                )
+            self.root.after(0, lambda: messagebox.showinfo("Done", msg))
         except Exception as exc:
             self.status(f"Failed: {exc}")
             self.log("ERROR: " + str(exc))
