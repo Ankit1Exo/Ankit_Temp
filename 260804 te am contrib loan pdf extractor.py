@@ -48,9 +48,6 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 # Tunables
 # ---------------------------------------------------------------------------
 
-# Regex for lines that end the current table segment.
-STOP_RE = re.compile(r"\b(subtotals?|eft\s+totals?)\b", re.IGNORECASE)
-
 # Excel's hard per-sheet row cap (1,048,576), minus 1 for the header row.
 EXCEL_MAX_DATA_ROWS = 1_048_576 - 1
 
@@ -59,16 +56,27 @@ EXCEL_MAX_DATA_ROWS = 1_048_576 - 1
 # PDF parsing
 # ---------------------------------------------------------------------------
 
-def get_lines(page, y_tol=3.0):
+def get_lines(page, y_tol=5.0):
     """
-    Group a page's words into reading-order lines by y-position.
+    Group a page's words into reading-order lines by y-position. Used only
+    for HEADER detection (the words within one header cell, e.g. "Member" +
+    "ID", are typeset on the same physical baseline so a modest tolerance
+    is safe here).
 
     Deliberately ignores PyMuPDF's own block/line grouping: many
-    report-generated PDFs (Crystal Reports, SSRS, etc.) place every table
-    cell as an independent text object, so words on the same visual row
-    can land in different blocks/lines. Clustering by y0 proximity instead
-    reconstructs the visual row regardless of how the PDF's content
-    stream is structured.
+    report-generated / OCR'd PDFs place every table cell as an independent
+    text object, so words on the same visual row can land in different
+    blocks/lines as PyMuPDF sees them. Clustering by y0 proximity instead
+    reconstructs the visual row regardless of how the underlying text
+    layer is structured.
+
+    NOTE: this whole-line approach is NOT used for data rows. On OCR'd
+    (e.g. ABBYY) PDFs, different columns can drift vertically relative to
+    each other (scan skew / independent per-column OCR), so a data row's
+    ID and Name can land several points apart in y -- see
+    cluster_words_by_y() + extract_segment() below, which cluster each
+    column independently and then pair rows by nearest y instead of
+    requiring an exact match.
     """
     words = sorted(page.get_text("words"), key=lambda w: (w[1], w[0]))  # x0,y0,x1,y1,text,block,line,word_no
 
@@ -77,14 +85,38 @@ def get_lines(page, y_tol=3.0):
         for line in lines:
             if abs(line["y0"] - y0) <= y_tol:
                 line["words"].append((x0, y0, x1, y1, text))
+                line["y1"] = max(line["y1"], y1)
                 break
         else:
-            lines.append({"y0": y0, "words": [(x0, y0, x1, y1, text)]})
+            lines.append({"y0": y0, "y1": y1, "words": [(x0, y0, x1, y1, text)]})
 
     for line in lines:
         line["words"].sort(key=lambda w: w[0])
     lines.sort(key=lambda l: l["y0"])
     return lines
+
+
+def cluster_words_by_y(words, y_tol=4.0):
+    """
+    Cluster a set of words -- already filtered to one column's x-range --
+    into rows by y-position, independent of any other column. Returns a
+    list of {"y0", "text"} sorted top to bottom.
+    """
+    clusters = []
+    for w in sorted(words, key=lambda w: w[1]):
+        for c in clusters:
+            if abs(c["y0"] - w[1]) <= y_tol:
+                c["words"].append(w)
+                break
+        else:
+            clusters.append({"y0": w[1], "words": [w]})
+
+    out = []
+    for c in clusters:
+        c["words"].sort(key=lambda w: w[0])
+        out.append({"y0": c["y0"], "text": " ".join(w[4] for w in c["words"]).strip()})
+    out.sort(key=lambda c: c["y0"])
+    return out
 
 
 def _norm(text):
@@ -159,51 +191,101 @@ def find_header_columns(words):
     return result
 
 
-def extract_range_text(words, rng):
-    if rng is None:
-        return ""
-    lo, hi = rng
-    toks = [t for (x0, y0, x1, y1, t) in words if lo <= x0 < hi]
-    return " ".join(toks).strip()
+def _is_stop_word(text):
+    """True for a word that marks the end of a table segment (Subtotals)."""
+    return _norm(text) in ("subtotal", "subtotals")
+
+
+def _mk_record(file_name, page_no, id_val, name_val):
+    return {"File Name": file_name, "Page Number": page_no, "ID": id_val, "Name": name_val}
+
+
+def extract_segment(words, active, y_lo, y_hi, file_name, page_no):
+    """
+    Extract ID/Name rows from the words falling between y_lo and y_hi
+    (exclusive), using the column x-ranges in `active`.
+
+    ID-column words and Name-column words are clustered into rows
+    INDEPENDENTLY (see cluster_words_by_y), then paired up by nearest
+    y-position rather than requiring them to share the same line. This is
+    what tolerates per-column vertical drift on OCR'd PDFs -- if the ID
+    entry for a row and the Name entry for that same row don't land at
+    exactly the same y, they still get matched as long as they're closer
+    to each other than to the next/previous row.
+    """
+    id_range = active.get("id")
+    name_range = active.get("name")
+
+    seg_words = [w for w in words if y_lo < w[1] < y_hi]
+    id_words = [w for w in seg_words if id_range and id_range[0] <= w[0] < id_range[1]]
+    name_words = [w for w in seg_words if name_range and name_range[0] <= w[0] < name_range[1]]
+
+    id_rows = cluster_words_by_y(id_words) if id_range else []
+    name_rows = cluster_words_by_y(name_words) if name_range else []
+
+    ys = sorted(r["y0"] for r in (id_rows or name_rows))
+    gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 1]
+    row_h = sorted(gaps)[len(gaps) // 2] if gaps else 14.0
+    pair_tol = max(row_h * 0.6, 6.0)
+
+    records = []
+    i, j = 0, 0
+    while i < len(id_rows) or j < len(name_rows):
+        if i < len(id_rows) and j < len(name_rows):
+            dy = id_rows[i]["y0"] - name_rows[j]["y0"]
+            if abs(dy) <= pair_tol:
+                records.append(_mk_record(file_name, page_no, id_rows[i]["text"], name_rows[j]["text"]))
+                i += 1
+                j += 1
+            elif dy < 0:
+                records.append(_mk_record(file_name, page_no, id_rows[i]["text"], ""))
+                i += 1
+            else:
+                records.append(_mk_record(file_name, page_no, "", name_rows[j]["text"]))
+                j += 1
+        elif i < len(id_rows):
+            records.append(_mk_record(file_name, page_no, id_rows[i]["text"], ""))
+            i += 1
+        else:
+            records.append(_mk_record(file_name, page_no, "", name_rows[j]["text"]))
+            j += 1
+
+    return [r for r in records if r["ID"] or r["Name"]]
 
 
 def process_pdf(path):
     """Return a list of {"File Name", "Page Number", "ID", "Name"} dicts."""
     records = []
-    active_cols = None
+    active = None
 
     with fitz.open(path) as doc:
         for page_no in range(len(doc)):
             page = doc[page_no]
+            all_words = sorted(page.get_text("words"), key=lambda w: (w[1], w[0]))
+
+            events = []  # (y, "header"|"stop", payload)
             for line in get_lines(page):
-                words = line["words"]
-                if not words:
-                    continue
-                line_text = " ".join(w[4] for w in words)
+                cols = find_header_columns(line["words"])
+                if cols:
+                    events.append((line["y0"], "header", (cols, line["y1"])))
+            for w in all_words:
+                if _is_stop_word(w[4]):
+                    events.append((w[1], "stop", None))
+            events.sort(key=lambda e: e[0])
 
-                header_cols = find_header_columns(words)
-                if header_cols:
-                    active_cols = header_cols
-                    continue
+            cursor_y = 0.0
+            for ev_y, kind, payload in events:
+                if active:
+                    records.extend(extract_segment(all_words, active, cursor_y, ev_y, path.name, page_no + 1))
+                if kind == "header":
+                    active, header_y1 = payload
+                    cursor_y = header_y1
+                else:
+                    active = None
+                    cursor_y = ev_y
 
-                if active_cols is None:
-                    continue
-
-                if STOP_RE.search(line_text):
-                    active_cols = None
-                    continue
-
-                id_val = extract_range_text(words, active_cols.get("id"))
-                name_val = extract_range_text(words, active_cols.get("name"))
-                if not id_val and not name_val:
-                    continue
-
-                records.append({
-                    "File Name": path.name,
-                    "Page Number": page_no + 1,
-                    "ID": id_val,
-                    "Name": name_val,
-                })
+            if active:
+                records.extend(extract_segment(all_words, active, cursor_y, float("inf"), path.name, page_no + 1))
 
     return records
 
