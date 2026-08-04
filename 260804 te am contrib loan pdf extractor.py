@@ -48,11 +48,6 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 # Tunables
 # ---------------------------------------------------------------------------
 
-# Max horizontal gap (in PDF points) between two words for them to be
-# considered part of the same header/data cell (e.g. "Member" + "ID").
-# A bigger gap than this is treated as a column boundary.
-CELL_GAP = 18.0
-
 # Regex for lines that end the current table segment.
 STOP_RE = re.compile(r"\b(subtotals?|eft\s+totals?)\b", re.IGNORECASE)
 
@@ -92,51 +87,75 @@ def get_lines(page, y_tol=3.0):
     return lines
 
 
-def cluster_cells(words, gap=CELL_GAP):
-    """Merge adjacent words into header/data cells based on horizontal gap."""
-    cells = []
-    cur = None
-    for x0, y0, x1, y1, text in words:
-        if cur is None:
-            cur = {"x0": x0, "x1": x1, "text": text}
-        elif x0 - cur["x1"] <= gap:
-            cur["x1"] = x1
-            cur["text"] += " " + text
-        else:
-            cells.append(cur)
-            cur = {"x0": x0, "x1": x1, "text": text}
-    if cur:
-        cells.append(cur)
-    return cells
+def _norm(text):
+    """Lowercase, alnum-only form of a word -- for matching OCR'd header
+    tokens regardless of stray punctuation the OCR engine may introduce."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def find_header_columns(cells):
+# OCR sometimes misreads "ID" as "1D"/"lD" (I/1/l confusion).
+ID_TOKEN_ALIASES = ("id", "1d", "ld")
+
+
+def find_header_columns(words):
     """
     If this line looks like a table header, return the ID / Name column
     x-ranges to use for subsequent data rows. Returns None otherwise.
-    """
-    id_idx = None
-    name_idx = None
-    for i, c in enumerate(cells):
-        norm = re.sub(r"\s+", " ", c["text"]).strip().lower()
-        if re.fullmatch(r"(member|participant)\s*id", norm):
-            id_idx = i
-        elif norm == "name" or re.fullmatch(r"member\s*name", norm):
-            name_idx = i
 
-    if id_idx is None and name_idx is None:
+    Column boundaries are derived purely from the x-position of the
+    matched header words themselves (this word vs. the next word on the
+    line) -- there is no fixed-gap/clustering assumption. That matters
+    for OCR'd (e.g. ABBYY) PDFs, whose text layer can use a completely
+    different point scale, spacing, and word-segmentation behavior than
+    a natively-generated PDF, which broke the earlier gap-based approach.
+    """
+    toks = [_norm(w[4]) for w in words]
+    n = len(words)
+    id_col = None    # (start_index, word_span)
+    name_col = None
+
+    i = 0
+    while i < n:
+        t = toks[i]
+        if t in ("member", "participant") and i + 1 < n and toks[i + 1] in ID_TOKEN_ALIASES:
+            id_col = (i, 2)
+            i += 2
+            continue
+        if t in ("memberid", "participantid"):
+            id_col = (i, 1)
+            i += 1
+            continue
+        if t == "member" and i + 1 < n and toks[i + 1] == "name":
+            name_col = (i, 2)
+            i += 2
+            continue
+        if t == "membername":
+            name_col = (i, 1)
+            i += 1
+            continue
+        if t == "name":
+            name_col = (i, 1)
+            i += 1
+            continue
+        i += 1
+
+    if id_col is None and name_col is None:
         return None
 
-    def col_range(idx):
-        left = cells[idx]["x0"] - 3
-        right = cells[idx + 1]["x0"] - 1 if idx + 1 < len(cells) else cells[idx]["x1"] + 300
+    def col_range(idx, span):
+        left = words[idx][0] - 3
+        next_idx = idx + span
+        if next_idx < n:
+            right = words[next_idx][0] - 1
+        else:
+            right = words[idx + span - 1][2] + 300
         return (left, right)
 
     result = {}
-    if id_idx is not None:
-        result["id"] = col_range(id_idx)
-    if name_idx is not None:
-        result["name"] = col_range(name_idx)
+    if id_col:
+        result["id"] = col_range(*id_col)
+    if name_col:
+        result["name"] = col_range(*name_col)
     return result
 
 
@@ -157,12 +176,12 @@ def process_pdf(path):
         for page_no in range(len(doc)):
             page = doc[page_no]
             for line in get_lines(page):
-                cells = cluster_cells(line["words"])
-                if not cells:
+                words = line["words"]
+                if not words:
                     continue
-                line_text = " ".join(c["text"] for c in cells)
+                line_text = " ".join(w[4] for w in words)
 
-                header_cols = find_header_columns(cells)
+                header_cols = find_header_columns(words)
                 if header_cols:
                     active_cols = header_cols
                     continue
@@ -174,8 +193,8 @@ def process_pdf(path):
                     active_cols = None
                     continue
 
-                id_val = extract_range_text(line["words"], active_cols.get("id"))
-                name_val = extract_range_text(line["words"], active_cols.get("name"))
+                id_val = extract_range_text(words, active_cols.get("id"))
+                name_val = extract_range_text(words, active_cols.get("name"))
                 if not id_val and not name_val:
                     continue
 
@@ -187,6 +206,34 @@ def process_pdf(path):
                 })
 
     return records
+
+
+def diagnose(pdf_path, max_pages=2):
+    """
+    Print the detected line/word structure for the first few pages of one
+    PDF, so header-detection failures on OCR'd files can be debugged.
+
+    Runs entirely locally -- this prints actual extracted text (including
+    names/IDs) to YOUR terminal. Do not paste that raw output into chat;
+    instead describe what you see structurally (e.g. "the header line
+    shows as one merged word with no spaces", "page width is 2550pt",
+    "HEADER MATCH never appears").
+    """
+    with fitz.open(pdf_path) as doc:
+        print(f"File: {pdf_path}")
+        print(f"Pages: {len(doc)}")
+        for page_no in range(min(max_pages, len(doc))):
+            page = doc[page_no]
+            print(f"\n=== Page {page_no + 1} | size {page.rect.width:.1f} x {page.rect.height:.1f} pt ===")
+            lines = get_lines(page)
+            total_words = sum(len(l["words"]) for l in lines)
+            print(f"  {len(lines)} line(s) detected, {total_words} word(s) total")
+            for li, line in enumerate(lines):
+                words = line["words"]
+                header_cols = find_header_columns(words)
+                tag = "  <-- HEADER MATCH" if header_cols else ""
+                preview = " | ".join(f"'{w[4]}'@x{w[0]:.0f}" for w in words)
+                print(f"  L{li:03d} y={line['y0']:7.1f} n={len(words):3d}: {preview}{tag}")
 
 
 def find_pdf_files(folder):
@@ -396,6 +443,15 @@ class ExtractorApp:
 
 
 def main():
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--diagnose":
+        if len(sys.argv) < 3:
+            print('Usage: python "260804 te am contrib loan pdf extractor.py" --diagnose <pdf_path> [max_pages]')
+            return
+        max_pages = int(sys.argv[3]) if len(sys.argv) > 3 else 2
+        diagnose(sys.argv[2], max_pages)
+        return
+
     root = tk.Tk()
     ExtractorApp(root)
     root.mainloop()
