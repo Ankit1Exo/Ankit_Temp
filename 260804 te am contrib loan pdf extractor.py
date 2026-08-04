@@ -18,6 +18,14 @@ minor layout drift between reports. If a report uses different wording
 for these headers, nothing will be extracted for it -- check the log for
 files that returned 0 rows.
 
+Contributions rows are also validated against their expected value shape:
+Member ID (a plain number), Member Name (contains letters), ER Match in K
+(a decimal), Elect Deferral (a decimal). If overlapping/overwritten OCR
+text breaks that sequence for a given line, only that line is skipped --
+extraction continues with the next line rather than emitting bad data or
+aborting the table. Loans rows have no amount columns to validate against,
+so they keep the more tolerant blank-Participant-ID-is-normal behavior.
+
 Output columns: File Name | Page Number | ID | Name
 
 If the combined row count exceeds Excel's per-sheet limit
@@ -131,8 +139,18 @@ ID_TOKEN_ALIASES = ("id", "1d", "ld")
 
 def find_header_columns(words):
     """
-    If this line looks like a table header, return the ID / Name column
-    x-ranges to use for subsequent data rows. Returns None otherwise.
+    If this line looks like a table header, return the column x-ranges to
+    use for subsequent data rows. Returns None otherwise.
+
+    Recognizes: Member ID / Participant ID -> "id"
+                Member Name / Name         -> "name"
+                ER Match in K              -> "er_match"
+                Elect Deferral             -> "elect_deferral"
+
+    The last two are only present on the Contributions header and are
+    used to validate the expected number-text-decimal-decimal row
+    sequence (see extract_segment's strict mode) -- they are not part of
+    the output columns.
 
     Column boundaries are derived purely from the x-position of the
     matched header words themselves (this word vs. the next word on the
@@ -145,6 +163,8 @@ def find_header_columns(words):
     n = len(words)
     id_col = None    # (start_index, word_span)
     name_col = None
+    er_col = None
+    ed_col = None
 
     i = 0
     while i < n:
@@ -169,9 +189,25 @@ def find_header_columns(words):
             name_col = (i, 1)
             i += 1
             continue
+        if t == "er" and i + 3 < n and toks[i + 1] == "match" and toks[i + 2] == "in" and toks[i + 3] == "k":
+            er_col = (i, 4)
+            i += 4
+            continue
+        if t in ("ermatchink", "ermatch"):
+            er_col = (i, 1)
+            i += 1
+            continue
+        if t == "elect" and i + 1 < n and toks[i + 1] == "deferral":
+            ed_col = (i, 2)
+            i += 2
+            continue
+        if t == "electdeferral":
+            ed_col = (i, 1)
+            i += 1
+            continue
         i += 1
 
-    if id_col is None and name_col is None:
+    if id_col is None and name_col is None and er_col is None and ed_col is None:
         return None
 
     def col_range(idx, span):
@@ -188,6 +224,10 @@ def find_header_columns(words):
         result["id"] = col_range(*id_col)
     if name_col:
         result["name"] = col_range(*name_col)
+    if er_col:
+        result["er_match"] = col_range(*er_col)
+    if ed_col:
+        result["elect_deferral"] = col_range(*ed_col)
     return result
 
 
@@ -200,33 +240,55 @@ def _mk_record(file_name, page_no, id_val, name_val):
     return {"File Name": file_name, "Page Number": page_no, "ID": id_val, "Name": name_val}
 
 
-def extract_segment(words, active, y_lo, y_hi, file_name, page_no):
-    """
-    Extract ID/Name rows from the words falling between y_lo and y_hi
-    (exclusive), using the column x-ranges in `active`.
+# Expected value "shape" for a valid Contributions row: Member ID (a plain
+# number), Member Name (contains letters), ER Match in K (a decimal),
+# Elect Deferral (a decimal). Used only when both amount columns were
+# found on the header -- i.e. Contributions-style rows, not Loans rows.
+ID_NUMERIC_RE = re.compile(r"^\d+$")
+NAME_TEXT_RE = re.compile(r"[A-Za-z]")
+DECIMAL_RE = re.compile(r"^-?\d[\d,]*\.\d+$")
 
-    ID-column words and Name-column words are clustered into rows
-    INDEPENDENTLY (see cluster_words_by_y), then paired up by nearest
-    y-position rather than requiring them to share the same line. This is
-    what tolerates per-column vertical drift on OCR'd PDFs -- if the ID
-    entry for a row and the Name entry for that same row don't land at
-    exactly the same y, they still get matched as long as they're closer
-    to each other than to the next/previous row.
-    """
-    id_range = active.get("id")
-    name_range = active.get("name")
 
-    seg_words = [w for w in words if y_lo < w[1] < y_hi]
-    id_words = [w for w in seg_words if id_range and id_range[0] <= w[0] < id_range[1]]
-    name_words = [w for w in seg_words if name_range and name_range[0] <= w[0] < name_range[1]]
+def _looks_like_id(text):
+    return bool(ID_NUMERIC_RE.match(text.replace(" ", "")))
 
-    id_rows = cluster_words_by_y(id_words) if id_range else []
-    name_rows = cluster_words_by_y(name_words) if name_range else []
 
-    ys = sorted(r["y0"] for r in (id_rows or name_rows))
+def _looks_like_name(text):
+    return bool(NAME_TEXT_RE.search(text))
+
+
+def _looks_like_decimal(text):
+    return bool(DECIMAL_RE.match(text.strip()))
+
+
+def _estimate_row_height(*row_lists):
+    non_empty = [rows for rows in row_lists if rows]
+    if not non_empty:
+        return 14.0
+    base = max(non_empty, key=len)
+    ys = sorted(r["y0"] for r in base)
     gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 1]
-    row_h = sorted(gaps)[len(gaps) // 2] if gaps else 14.0
-    pair_tol = max(row_h * 0.6, 6.0)
+    return sorted(gaps)[len(gaps) // 2] if gaps else 14.0
+
+
+def _nearest_unused(rows, y, tol, used):
+    """Index of the row in `rows` closest to y (within tol) not already in `used`, or None."""
+    best_idx, best_dy = None, None
+    for idx, r in enumerate(rows):
+        if idx in used:
+            continue
+        dy = abs(r["y0"] - y)
+        if dy <= tol and (best_dy is None or dy < best_dy):
+            best_idx, best_dy = idx, dy
+    return best_idx
+
+
+def _extract_lenient_rows(id_rows, name_rows, file_name, page_no):
+    """
+    Pair ID/Name rows by nearest y, tolerating a blank on either side
+    (e.g. Loans rows commonly have no Participant ID at all).
+    """
+    pair_tol = max(_estimate_row_height(id_rows, name_rows) * 0.6, 6.0)
 
     records = []
     i, j = 0, 0
@@ -253,12 +315,108 @@ def extract_segment(words, active, y_lo, y_hi, file_name, page_no):
     return [r for r in records if r["ID"] or r["Name"]]
 
 
+def _extract_strict_rows(id_rows, name_rows, er_rows, ed_rows, file_name, page_no, stats=None):
+    """
+    Only emit a row when the full Member ID / Member Name / ER Match in K /
+    Elect Deferral sequence is present AND each value has the expected
+    shape (number - text - decimal - decimal). Anchors on the ID rows
+    (Member ID is expected on every valid Contributions line); if any of
+    the other three columns is missing nearby, or a matched value doesn't
+    look like the expected type -- e.g. overlapping/overwritten text
+    scrambled it -- that single line is skipped and the next ID row is
+    tried, rather than emitting bad data or aborting the segment.
+    """
+    pair_tol = max(_estimate_row_height(id_rows, name_rows, er_rows, ed_rows) * 0.6, 6.0)
+
+    records = []
+    used_name, used_er, used_ed = set(), set(), set()
+    for id_row in id_rows:
+        y = id_row["y0"]
+        ni = _nearest_unused(name_rows, y, pair_tol, used_name)
+        ei = _nearest_unused(er_rows, y, pair_tol, used_er)
+        di = _nearest_unused(ed_rows, y, pair_tol, used_ed)
+
+        if ni is None or ei is None or di is None:
+            if stats is not None:
+                stats["rows_skipped"] += 1
+            continue
+
+        id_text = id_row["text"]
+        name_text = name_rows[ni]["text"]
+        er_text = er_rows[ei]["text"]
+        ed_text = ed_rows[di]["text"]
+
+        if not (_looks_like_id(id_text) and _looks_like_name(name_text)
+                and _looks_like_decimal(er_text) and _looks_like_decimal(ed_text)):
+            if stats is not None:
+                stats["rows_skipped"] += 1
+            continue
+
+        used_name.add(ni)
+        used_er.add(ei)
+        used_ed.add(di)
+        records.append(_mk_record(file_name, page_no, id_text, name_text))
+
+    return records
+
+
+def extract_segment(words, active, y_lo, y_hi, file_name, page_no, stats=None):
+    """
+    Extract ID/Name rows from the words falling between y_lo and y_hi
+    (exclusive), using the column x-ranges in `active`.
+
+    Every relevant column's words are clustered into rows INDEPENDENTLY
+    (see cluster_words_by_y) rather than requiring them to share a line --
+    this is what tolerates per-column vertical drift on OCR'd PDFs, where
+    the ID entry and Name entry for the same row can land several points
+    apart in y.
+
+    When the header also carried "ER Match in K" and "Elect Deferral"
+    (Contributions rows), strict-mode validation is applied: a row is only
+    kept if all four values are present nearby AND match the expected
+    number/text/decimal/decimal shape (see _extract_strict_rows). Loans
+    rows (no amount columns tracked) keep the earlier lenient pairing,
+    since a blank Participant ID there is normal, not an error.
+    """
+    id_range = active.get("id")
+    name_range = active.get("name")
+    er_range = active.get("er_match")
+    ed_range = active.get("elect_deferral")
+
+    seg_words = [w for w in words if y_lo < w[1] < y_hi]
+
+    def words_in(rng):
+        if not rng:
+            return []
+        lo, hi = rng
+        return [w for w in seg_words if lo <= w[0] < hi]
+
+    id_rows = cluster_words_by_y(words_in(id_range)) if id_range else []
+    name_rows = cluster_words_by_y(words_in(name_range)) if name_range else []
+
+    if er_range and ed_range:
+        er_rows = cluster_words_by_y(words_in(er_range))
+        ed_rows = cluster_words_by_y(words_in(ed_range))
+        return _extract_strict_rows(id_rows, name_rows, er_rows, ed_rows, file_name, page_no, stats)
+
+    return _extract_lenient_rows(id_rows, name_rows, file_name, page_no)
+
+
 def process_pdf(path):
-    """Return a list of {"File Name", "Page Number", "ID", "Name"} dicts."""
+    """
+    Return (records, stats).
+
+    records: list of {"File Name", "Page Number", "ID", "Name"} dicts.
+    stats: counts useful for diagnosing extraction issues without exposing
+    any PII -- header/stop-marker counts, and how many output rows came
+    out fully paired vs. missing one side.
+    """
     records = []
     active = None
+    stats = {"pages": 0, "headers_found": 0, "stop_markers_found": 0, "rows_skipped": 0}
 
     with fitz.open(path) as doc:
+        stats["pages"] = len(doc)
         for page_no in range(len(doc)):
             page = doc[page_no]
             all_words = sorted(page.get_text("words"), key=lambda w: (w[1], w[0]))
@@ -268,26 +426,35 @@ def process_pdf(path):
                 cols = find_header_columns(line["words"])
                 if cols:
                     events.append((line["y0"], "header", (cols, line["y1"])))
+                    stats["headers_found"] += 1
             for w in all_words:
                 if _is_stop_word(w[4]):
                     events.append((w[1], "stop", None))
+                    stats["stop_markers_found"] += 1
             events.sort(key=lambda e: e[0])
 
+            # A "stop" marker (Subtotals) only chunks the segment so the
+            # row-height estimate stays local to each block of rows -- it
+            # does NOT clear `active`. Some reports repeat a subtotal line
+            # mid-table (e.g. a running/page subtotal) before continuing
+            # the same table; only a genuinely new header line should
+            # redefine the column mapping. Any trailing footer text after
+            # the true last table on a page won't produce spurious rows
+            # since it has no words positioned inside the ID/Name columns.
             cursor_y = 0.0
             for ev_y, kind, payload in events:
                 if active:
-                    records.extend(extract_segment(all_words, active, cursor_y, ev_y, path.name, page_no + 1))
+                    records.extend(extract_segment(all_words, active, cursor_y, ev_y, path.name, page_no + 1, stats))
                 if kind == "header":
                     active, header_y1 = payload
                     cursor_y = header_y1
                 else:
-                    active = None
                     cursor_y = ev_y
 
             if active:
-                records.extend(extract_segment(all_words, active, cursor_y, float("inf"), path.name, page_no + 1))
+                records.extend(extract_segment(all_words, active, cursor_y, float("inf"), path.name, page_no + 1, stats))
 
-    return records
+    return records, stats
 
 
 def diagnose(pdf_path, max_pages=2):
@@ -352,16 +519,24 @@ def run_extraction(source_folder, dest_path, log, progress, status=None):
     for idx, path in enumerate(files, start=1):
         _status(f"Reading {path.name} ({idx}/{total_files})...")
         try:
-            recs = process_pdf(path)
+            recs, stats = process_pdf(path)
         except Exception as exc:
             log(f"  ! Failed to process {path.name}: {exc}")
             progress(idx, total_files)
             continue
 
         if recs:
-            log(f"  - {path.name}: {len(recs)} row(s)")
+            paired = sum(1 for r in recs if r["ID"] and r["Name"])
+            id_only = sum(1 for r in recs if r["ID"] and not r["Name"])
+            name_only = sum(1 for r in recs if r["Name"] and not r["ID"])
+            log(f"  - {path.name}: {len(recs)} row(s) "
+                f"[{paired} paired, {id_only} ID-only, {name_only} Name-only, "
+                f"{stats['rows_skipped']} skipped as malformed] -- "
+                f"{stats['headers_found']} header(s), {stats['stop_markers_found']} Subtotal marker(s), "
+                f"{stats['pages']} page(s)")
         else:
-            log(f"  - {path.name}: 0 rows (headers not recognized -- check layout)")
+            log(f"  - {path.name}: 0 rows -- {stats['headers_found']} header(s) recognized, "
+                f"{stats['pages']} page(s) (headers not recognized if 0 -- check layout)")
         all_records.extend(recs)
         progress(idx, total_files)
 
