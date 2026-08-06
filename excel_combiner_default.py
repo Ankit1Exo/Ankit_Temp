@@ -1,8 +1,9 @@
 """
 Excel Combiner (Default)
 
-Scans a folder of .xlsx / .xls files and combines every sheet of every
-workbook into a single master workbook - no sheet-name filter (unlike
+Scans a folder of .xlsx / .xls / .csv files and combines every sheet of
+every workbook (and every CSV, treated as a single-sheet file) into a
+single master workbook - no sheet-name filter (unlike
 extract_named_sheets.py) and no pivot-table skip or name/ssn/dob header
 detection (unlike excel_pivotCheck_compiler.py). This is the generic,
 default combiner for any mix of sheet layouts.
@@ -87,12 +88,12 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
     dest_abs = os.path.abspath(dest_path)
     files = sorted(
         f for f in os.listdir(source_folder)
-        if f.lower().endswith((".xlsx", ".xls"))
+        if f.lower().endswith((".xlsx", ".xls", ".csv"))
         and not f.startswith("~$")
         and os.path.abspath(os.path.join(source_folder, f)) != dest_abs
     )
     if not files:
-        raise ValueError("No .xlsx or .xls files found in the source folder")
+        raise ValueError("No .xlsx, .xls, or .csv files found in the source folder")
 
     total_files = len(files)
     log(f"Found {total_files} file(s) to combine.")
@@ -106,17 +107,24 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
         file_path = os.path.join(source_folder, filename)
         _status(f"Opening {filename}...")
 
-        try:
-            book = pd.ExcelFile(file_path)
-        except Exception as exc:
-            log(f"  ! Failed to open {filename}: {exc}")
-            progress(file_idx, total_files)
-            continue
+        if filename.lower().endswith(".csv"):
+            sheets = [("CSV", None)]
+        else:
+            try:
+                book = pd.ExcelFile(file_path)
+            except Exception as exc:
+                log(f"  ! Failed to open {filename}: {exc}")
+                progress(file_idx, total_files)
+                continue
+            sheets = [(name, book) for name in book.sheet_names]
 
-        for sheet_name in book.sheet_names:
+        for sheet_name, book in sheets:
             _status(f"{filename}: reading sheet '{sheet_name}'...")
             try:
-                data = book.parse(sheet_name=sheet_name, dtype=object)
+                if book is None:
+                    data = pd.read_csv(file_path, dtype=object)
+                else:
+                    data = book.parse(sheet_name=sheet_name, dtype=object)
             except Exception as exc:
                 log(f"  ! Failed to read {filename} [{sheet_name}]: {exc}")
                 continue
