@@ -48,18 +48,29 @@ SSN_CAPTION_RE = re.compile(r"Employee.?s\s+(?:social security number|SSN)\b", r
 NAME_CAPTION_RE = re.compile(r"Employee.?s\s+(?:first name and initial|name,\s*address)", re.IGNORECASE)
 
 STOP_LABEL_RE = re.compile(
-    r"^(?:f\s+Employee.s address|\d{1,2}\s+State\b|Employer.s state ID|Local income tax|Locality name|"
+    r"^(?:\d{1,2}\s+State\b|Employer.s state ID|Local income tax|Locality name|"
     r"Form\s*W-?2\b|Wage\s*(?:&|and)\s*Tax Statement|Copy\s+[A-Z0-9]|"
     r"For (?:Official|Privacy)|Department of the Treasury|20\d{2}$)",
     re.IGNORECASE,
 )
+
+# On some W-2 vintages, name (box e) and address (box f) are two separate
+# captions rather than one combined "e Employee's name, address, and ZIP
+# code" box, with the actual street/city lines printing below the box f
+# caption. Skip over this caption rather than treating it as a stop label --
+# it isn't the start of an unrelated section, the real address is right
+# below it.
+BOX_F_CAPTION_RE = re.compile(r"^f\s+Employee.s address", re.IGNORECASE)
 
 # Accepts dash, space, or no separator (9 digits run together) so a valid
 # SSN isn't missed just because the PDF's text layer dropped the dashes;
 # normalize_ssn() below reformats whatever is found to XXX-XX-XXXX.
 SSN_VALUE_RE = re.compile(r"\b(\d{3})[-\s]?(\d{2})[-\s]?(\d{4})\b")
 
-CITY_STATE_ZIP_RE = re.compile(r"^(?P<city>.+?),?\s+(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)\b")
+# ",?\s*" (not ",?\s+") between city and state -- this ABBYY layout sometimes
+# runs the comma straight into the state code with no space at all, e.g.
+# "ST. PETERSBURG,FL 33716".
+CITY_STATE_ZIP_RE = re.compile(r"^(?P<city>.+?),?\s*(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)\b")
 
 # "b Employer ID no. (EIN)" value, e.g. "12-3456789" -- 2-7 grouping, distinct
 # from the SSN's 3-2-4 grouping. Used only as an anchor in the shape-based
@@ -107,6 +118,61 @@ def normalize_ssn(match):
     return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
 
 
+# Horizontal gap (in points) big enough to mark a real column boundary rather
+# than normal word/label spacing -- tuned against the single-employee "Copy D"
+# layout where box e (name/address) sits directly left of boxes 9-14/12a-12d
+# on the same rows, with nothing between them but form whitespace.
+NAME_ROW_COLUMN_GAP = 60
+
+# Same as NAME_CAPTION_RE but also consumes the "Last name" / "Suff." sub-
+# labels that print on the same row when box e is split into first/last/
+# suffix columns, so clip_right_column() (below) knows where box e's own
+# header text ends before it starts looking for an adjacent-column gap --
+# otherwise the ordinary spacing between "and initial" and "Last name" could
+# itself be mistaken for that gap.
+NAME_CAPTION_WITH_SUBLABELS_RE = re.compile(
+    r"Employee.?s\s+(?:first name and initial(?:\s+Last name)?(?:\s+Suff\.?)?|"
+    r"name,\s*address(?:,?\s*and\s*ZIP code)?)",
+    re.IGNORECASE,
+)
+
+
+def clip_right_column(words, y_tol=3):
+    """On a single-employee-per-page W-2 (e.g. Copy D), box e (Employee's
+    name/address) occupies the left part of the page while boxes 9-14 and
+    12a-12d occupy the right part, row for row, right alongside it -- unlike
+    the 2-up/4-up grids elsewhere in this script, nothing splits this page
+    into columns before line-grouping, so those box values get merged onto
+    the same OCR "line" as the name/address text next to them (e.g. the
+    street line plus box 13's checkboxes, or the city/state/zip line plus
+    box 12d). Find the row containing the name/address caption, look for the
+    horizontal gap where its own header text (including "Last name"/"Suff."
+    when present) ends and the adjacent box column begins, and drop every
+    word at or past that x for the whole cell -- box e's block continues for
+    several rows directly below the caption at the same x-range, in lockstep
+    with the adjacent boxes, so one boundary from the caption row applies to
+    the rows below it too."""
+    for line in group_words_into_lines(words, y_tol):
+        parts, offsets, pos = [], [], 0
+        for idx, (_, _, text) in enumerate(line):
+            offsets.append((pos, idx))
+            parts.append(text)
+            pos += len(text) + 1
+        joined = " ".join(parts)
+        m = NAME_CAPTION_WITH_SUBLABELS_RE.search(joined)
+        if not m:
+            continue
+        boundary_idx = next((idx for start, idx in offsets if start >= m.end()), None)
+        if boundary_idx is None:
+            return words
+        prev_x1 = line[boundary_idx - 1][1]
+        next_x0 = line[boundary_idx][0]
+        if next_x0 - prev_x1 < NAME_ROW_COLUMN_GAP:
+            return words
+        return [w for w in words if w[0] < next_x0]
+    return words
+
+
 def group_words_into_lines(words, y_tol=3):
     lines = {}
     for w in words:
@@ -148,6 +214,8 @@ def find_name_address(plain_lines, page_num, column_label):
             for candidate in raw_block:
                 candidate = candidate.strip()
                 if not candidate:
+                    continue
+                if BOX_F_CAPTION_RE.search(candidate):
                     continue
                 if STOP_LABEL_RE.search(candidate):
                     break
@@ -401,6 +469,7 @@ def process_page(page, page_num, split_fraction):
             cells = build_grid_cells(page, words, groups, split_fraction, page_num)
 
     for column_label, column_words in cells:
+        column_words = clip_right_column(column_words)
         lines = group_words_into_lines(column_words)
         plain_lines = [normalize_text(" ".join(t for _, _, t in ln)) for ln in lines]
 
