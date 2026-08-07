@@ -1,15 +1,17 @@
 """
 Excel Combiner (Default)
 
-Scans a folder of .xlsx / .xls / .csv files and combines every sheet of
-every workbook (and every CSV, treated as a single-sheet file) into a
-single master workbook - no sheet-name filter (unlike
-extract_named_sheets.py) and no pivot-table skip or name/ssn/dob header
-detection (unlike excel_pivotCheck_compiler.py). This is the generic,
-default combiner for any mix of sheet layouts.
+Scans a folder of .xlsx / .xlsm / .xls / .csv files and combines every
+sheet of every workbook (and every CSV, treated as a single-sheet file)
+into a single master workbook - no sheet-name filter (unlike
+extract_named_sheets.py) and no name/ssn/dob header detection (unlike
+excel_pivotCheck_compiler.py). This is the generic, default combiner
+for any mix of sheet layouts.
 
   1. Every sheet in every file is read (the first row is treated as the
-     header - pandas' normal default).
+     header - pandas' normal default). Any sheet that contains a pivot
+     table is skipped - only that sheet is excluded, every other sheet
+     in the same workbook is still combined.
 
   2. Columns are matched across every file/sheet by header text:
        - A header name already seen in a previous sheet lines up under
@@ -32,6 +34,7 @@ import os
 import threading
 import traceback
 
+import openpyxl
 import pandas as pd
 
 import tkinter as tk
@@ -66,6 +69,26 @@ def clean_header_names(columns):
 
 
 # --------------------------------------------------------------------------
+# Pivot table detection
+# --------------------------------------------------------------------------
+
+def find_pivot_sheets(file_path):
+    """Return the set of sheet names in an .xlsx/.xlsm workbook that
+    contain at least one PivotTable, so only those sheets get skipped
+    while every other sheet in the same workbook is still combined.
+    Older .xls workbooks aren't supported by openpyxl - callers get an
+    empty set back for those, i.e. no sheets are excluded."""
+    try:
+        wb = openpyxl.load_workbook(file_path, read_only=False, data_only=True)
+    except Exception:
+        return set()
+    try:
+        return {ws.title for ws in wb.worksheets if getattr(ws, "_pivots", None)}
+    finally:
+        wb.close()
+
+
+# --------------------------------------------------------------------------
 # Combine
 # --------------------------------------------------------------------------
 
@@ -88,12 +111,12 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
     dest_abs = os.path.abspath(dest_path)
     files = sorted(
         f for f in os.listdir(source_folder)
-        if f.lower().endswith((".xlsx", ".xls", ".csv"))
+        if f.lower().endswith((".xlsx", ".xlsm", ".xls", ".csv"))
         and not f.startswith("~$")
         and os.path.abspath(os.path.join(source_folder, f)) != dest_abs
     )
     if not files:
-        raise ValueError("No .xlsx, .xls, or .csv files found in the source folder")
+        raise ValueError("No .xlsx, .xlsm, .xls, or .csv files found in the source folder")
 
     total_files = len(files)
     log(f"Found {total_files} file(s) to combine.")
@@ -109,6 +132,7 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
 
         if filename.lower().endswith(".csv"):
             sheets = [("CSV", None)]
+            pivot_sheets = set()
         else:
             try:
                 book = pd.ExcelFile(file_path)
@@ -117,8 +141,13 @@ def combine_files(source_folder, dest_path, log, progress, status=None):
                 progress(file_idx, total_files)
                 continue
             sheets = [(name, book) for name in book.sheet_names]
+            pivot_sheets = find_pivot_sheets(file_path)
 
         for sheet_name, book in sheets:
+            if sheet_name in pivot_sheets:
+                log(f"  - {filename} [{sheet_name}]: pivot table detected, sheet excluded")
+                continue
+
             _status(f"{filename}: reading sheet '{sheet_name}'...")
             try:
                 if book is None:
