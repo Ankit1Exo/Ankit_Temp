@@ -253,11 +253,27 @@ def parse_contact_block(lines):
     return result, notes
 
 
+HEADER_SEARCH_WINDOW = 3
+
+
 def find_header_line_idx(lines):
-    for idx, line in enumerate(lines):
-        text = " ".join(t for _, _, t in line).lower()
-        if "term code" in text and "action requested" in text:
-            return idx
+    """Returns the index of the LAST line that's part of the course-table
+    header phrase, or None if it can't be found. Checked over a small
+    window of consecutive lines, not just one, because some real forms
+    render adjacent header cells (e.g. "Term Code" vs. "Action
+    Requested") at slightly different y-baselines -- our line-grouping
+    buckets words into the same line only when their y rounds to the
+    same value, so a few points of baseline mismatch would otherwise
+    split one visual header row into two or more separate "lines" here
+    and make the phrase match fail outright."""
+    for idx in range(len(lines)):
+        end_of_window = min(idx + HEADER_SEARCH_WINDOW, len(lines))
+        for end in range(idx, end_of_window):
+            window_text = " ".join(
+                t for j in range(idx, end + 1) for _, _, t in lines[j]
+            ).lower()
+            if "term code" in window_text and "action requested" in window_text:
+                return end
     return None
 
 
