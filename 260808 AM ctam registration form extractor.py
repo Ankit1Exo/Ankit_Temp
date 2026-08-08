@@ -20,16 +20,19 @@ Reference layout (top block, then a course table, then totals):
     Total Cost to Student <amount>
     Total TA <amount>
 
-Column layout for the course table is located dynamically from each
-header label's x-position (not hardcoded coordinates), and the contact
-block's labels are matched independently of which line they land on --
-so minor template shifts should still parse. If a page lists more than
-one course, only the FIRST course row's values are kept for that page
-(one output row per person/page, not one row per course) -- when that
-happens, "Extraction Notes" records how many course rows were found. A
-page whose layout doesn't match well enough to find a given field is
-left blank there and flagged in "Extraction Notes" rather than silently
-producing wrong data -- treat any flagged row as needing a manual look.
+The contact block's labels are matched independently of which line they
+land on, so minor template shifts should still parse. The course table
+is read from the single line right after the header row: its 9 values
+are assigned by POSITION in reading order (first 5 tokens, last 3
+tokens, everything left in the middle becomes Course Title) rather than
+by x-alignment under the header -- the header and its data row don't
+reliably line up by x-position on the real forms this was built against.
+Only that first course line is kept per page (one output row per
+person/page, not one row per course); any additional course lines on
+the same page are ignored. A page whose layout doesn't match well enough
+to find a given field is left blank there and flagged in "Extraction
+Notes" rather than silently producing wrong data -- treat any flagged
+row as needing a manual look.
 
 GUI:
     - Source folder picker (folder containing the registration-form
@@ -258,54 +261,58 @@ def find_header_line_idx(lines):
     return None
 
 
-def header_column_ranges(header_line, page_width):
-    _, spans = label_values(header_line, COURSE_HEADERS)
-    ranges = {}
-    for idx, (lbl, s, e) in enumerate(spans):
-        x_start = header_line[s][0] - 3
-        x_end = header_line[spans[idx + 1][1]][0] - 1 if idx + 1 < len(spans) else page_width
-        ranges[lbl] = (x_start, x_end)
-    return ranges
+def parse_course_row_line(line):
+    """Splits one course-table data line into the 9 expected fields by
+    POSITION in reading order, not by x-alignment under the header --
+    real files had course values running together on one line with no
+    reliable x-alignment to the header labels above them, so column
+    boundaries computed from the header's x-position weren't landing on
+    the data at all. Term Code, Action Requested, Section Number,
+    Subject Code, and Catalog Number are taken as the first 5 tokens;
+    Course Credits, Student Class Cost, and Total Cost of Class as the
+    last 3; whatever token(s) remain in between (there can be more than
+    one, e.g. a multi-word course title) are joined as Course Title.
+    Stray checkbox/bullet glyphs (no letters or digits in them) are
+    dropped first so they don't shift this positional count off by one.
+    Returns None if there aren't enough tokens to fill all 9 fields."""
+    tokens = [t for _, _, t in line if re.search(r"[A-Za-z0-9]", t)]
+    if len(tokens) < 8:
+        return None
+    term_code, action_requested, section_number, subject_code, catalog_number = tokens[:5]
+    course_credits, student_class_cost, total_cost_of_class = tokens[-3:]
+    course_title = " ".join(tokens[5:-3])
+    return {
+        "Term Code": term_code,
+        "Action Requested": action_requested,
+        "Section Number": section_number,
+        "Subject Code": subject_code,
+        "Catalog Number": catalog_number,
+        "Course Title": course_title,
+        "Course Credits": course_credits,
+        "Student Class Cost": student_class_cost,
+        "Total Cost of Class": total_cost_of_class,
+    }
 
 
-def bucket_row(line, col_ranges):
-    buckets = {lbl: [] for lbl in col_ranges}
-    for x0, x1, text in line:
-        for lbl, (xs, xe) in col_ranges.items():
-            if xs <= x0 < xe:
-                buckets[lbl].append(text)
-                break
-    return {lbl: " ".join(v) for lbl, v in buckets.items()}
-
-
-def parse_course_table(lines, page_width):
+def parse_course_table(lines):
     header_idx = find_header_line_idx(lines)
     if header_idx is None:
         return {h: "" for h in COURSE_HEADERS}, ["course table header row not found"]
-    header_line = lines[header_idx]
-    col_ranges = header_column_ranges(header_line, page_width)
-    if len(col_ranges) < len(COURSE_HEADERS):
-        missing = [h for h in COURSE_HEADERS if h not in col_ranges]
-        return {h: "" for h in COURSE_HEADERS}, [f"course table header missing column(s): {', '.join(missing)}"]
 
-    rows = []
     for line in lines[header_idx + 1:]:
         text = " ".join(t for _, _, t in line).strip()
         if not text:
             continue
         if text.lower().startswith("total cost of courses"):
             break
-        rows.append(bucket_row(line, col_ranges))
+        parsed = parse_course_row_line(line)
+        if parsed is None:
+            return {h: "" for h in COURSE_HEADERS}, ["course row line found but too few values to fill all 9 fields"]
+        # Only the first course line is kept per page/person, as requested --
+        # if a page lists more than one course, later lines are ignored.
+        return parsed, []
 
-    if not rows:
-        return {h: "" for h in COURSE_HEADERS}, ["no course row(s) found below header"]
-
-    # Multiple courses on one page -> keep only the first row's values
-    # (one output row per person/page, not one per course).
-    notes = []
-    if len(rows) > 1:
-        notes.append(f"{len(rows)} course rows found on this page -- kept only the first")
-    return rows[0], notes
+    return {h: "" for h in COURSE_HEADERS}, ["no course row line found below header"]
 
 
 def parse_totals(lines):
@@ -338,7 +345,7 @@ def process_page(page):
             contact[col] = val
             contact_notes = [n for n in contact_notes if not n.startswith(f"'{col}'")]
 
-    course, course_notes = parse_course_table(lines, page.rect.width)
+    course, course_notes = parse_course_table(lines)
     totals, totals_notes = parse_totals(lines)
 
     row = {}
