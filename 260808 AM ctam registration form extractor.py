@@ -24,12 +24,12 @@ Column layout for the course table is located dynamically from each
 header label's x-position (not hardcoded coordinates), and the contact
 block's labels are matched independently of which line they land on --
 so minor template shifts should still parse. If a page lists more than
-one course, that page's course-table columns are combined into ONE
-output row (each column's values joined with "; "), not one row per
-course. A page whose layout doesn't match well enough to find a given
-field is left blank there and flagged in the "Extraction Notes" column
-rather than silently producing wrong data -- treat any flagged row as
-needing a manual look.
+one course, only the FIRST course row's values are kept for that page
+(one output row per person/page, not one row per course) -- when that
+happens, "Extraction Notes" records how many course rows were found. A
+page whose layout doesn't match well enough to find a given field is
+left blank there and flagged in "Extraction Notes" rather than silently
+producing wrong data -- treat any flagged row as needing a manual look.
 
 GUI:
     - Source folder picker (folder containing the registration-form
@@ -128,9 +128,16 @@ def group_words_into_lines(words, y_tol=3):
 
 def find_label_spans(line, labels):
     """Locate each label (a list of label strings, each possibly
-    multi-word) as an exact, case-insensitive token sequence on the line,
-    left to right. Returns [(label, start_idx, end_idx_exclusive), ...] in
-    the order the labels were actually found (not the order passed in)."""
+    multi-word) as a case-insensitive token sequence on the line, left to
+    right. Returns [(label, start_idx, end_idx_exclusive), ...] in the
+    order the labels were actually found (not the order passed in).
+
+    A multi-word label also matches a single token equal to the label
+    with its spaces removed (e.g. "Term Code" matches a "TermCode" word)
+    -- PDF text extraction sometimes fuses tightly-kerned words with no
+    real space character between them, as seen when validating this
+    against a synthetic PDF, so a two-word column header landing as one
+    word in a real file shouldn't make the whole column undetectable."""
     tokens = [t.strip(":").lower() for _, _, t in line]
     label_token_lists = [lbl.lower().split() for lbl in labels]
     n = len(tokens)
@@ -143,6 +150,9 @@ def find_label_spans(line, labels):
             tl = len(ltoks)
             if i + tl <= n and tokens[i:i + tl] == ltoks:
                 matched_at = (pos, lbl, tl)
+                break
+            if tl > 1 and tokens[i] == "".join(ltoks):
+                matched_at = (pos, lbl, 1)
                 break
         if matched_at:
             pos, lbl, tl = matched_at
@@ -242,8 +252,8 @@ def parse_contact_block(lines):
 
 def find_header_line_idx(lines):
     for idx, line in enumerate(lines):
-        text = " ".join(t for _, _, t in line)
-        if "Term Code" in text and "Action Requested" in text:
+        text = " ".join(t for _, _, t in line).lower()
+        if "term code" in text and "action requested" in text:
             return idx
     return None
 
@@ -283,23 +293,27 @@ def parse_course_table(lines, page_width):
         text = " ".join(t for _, _, t in line).strip()
         if not text:
             continue
-        if text.startswith("Total Cost of Courses"):
+        if text.lower().startswith("total cost of courses"):
             break
         rows.append(bucket_row(line, col_ranges))
 
     if not rows:
         return {h: "" for h in COURSE_HEADERS}, ["no course row(s) found below header"]
 
-    combined = {h: "; ".join(r[h] for r in rows if r.get(h)) for h in COURSE_HEADERS}
-    return combined, []
+    # Multiple courses on one page -> keep only the first row's values
+    # (one output row per person/page, not one per course).
+    notes = []
+    if len(rows) > 1:
+        notes.append(f"{len(rows)} course rows found on this page -- kept only the first")
+    return rows[0], notes
 
 
 def parse_totals(lines):
     result = {lbl: "" for lbl in TOTALS_LABELS}
     for line in lines:
-        text = " ".join(t for _, _, t in line).strip()
+        text = " ".join(t for _, _, t in line).strip().lower()
         for lbl in TOTALS_LABELS:
-            if text.startswith(lbl):
+            if text.startswith(lbl.lower()):
                 vals, _ = label_values(line, [lbl])
                 result[lbl] = " ".join(t for _, _, t in vals.get(lbl, []))
     notes = [f"'{lbl}' not found" for lbl in TOTALS_LABELS if not result[lbl]]
@@ -401,6 +415,64 @@ def run_extraction(source_folder, dest_folder, status_callback):
 
 
 # ===========================================================================
+# DEBUG (safe, PII-free diagnostic dump)
+# ===========================================================================
+ALL_KNOWN_LABELS = sorted(
+    {lbl for variants in CONTACT_LABEL_VARIANTS.values() for v in variants for lbl in [" ".join(v)]}
+    | set(COURSE_HEADERS) | set(TOTALS_LABELS),
+    key=len, reverse=True,
+)
+
+
+def mask_shape(s):
+    return re.sub(r"[A-Za-z]", "X", re.sub(r"\d", "#", s))
+
+
+def mask_line_except_labels(line):
+    """Renders a line with every known form-label token shown verbatim
+    (they're just static form text) and every other token -- the actual
+    filled-in values, e.g. an SSN or a name -- reduced to its digit/letter
+    shape. Safe to paste back for troubleshooting."""
+    tokens = [t for _, _, t in line]
+    lowered = [t.strip(":").lower() for t in tokens]
+    n = len(tokens)
+    is_label = [False] * n
+    for lbl in ALL_KNOWN_LABELS:
+        ltoks = lbl.lower().split()
+        tl = len(ltoks)
+        i = 0
+        while i + tl <= n:
+            if not any(is_label[i:i + tl]) and lowered[i:i + tl] == ltoks:
+                for k in range(i, i + tl):
+                    is_label[k] = True
+            i += 1
+    return " ".join(t if is_label[k] else mask_shape(t) for k, t in enumerate(tokens))
+
+
+def debug_page(path: Path, page_num: int):
+    doc = fitz.open(str(path))
+    if page_num < 1 or page_num > len(doc):
+        print(f"{path.name}: page {page_num} out of range (document has {len(doc)} page(s))")
+        doc.close()
+        return
+    page = doc[page_num - 1]
+    text = page.get_text()
+    print(f"--- {path.name} page {page_num} ---")
+    print(f"text layer: {len(text.strip())} chars "
+          f"({'OK' if len(text.strip()) >= MIN_TEXT_CHARS_PER_PAGE else 'BELOW MIN -- treated as image-only'})")
+
+    words = page.get_text("words")
+    lines = group_words_into_lines(words)
+    header_idx = find_header_line_idx(lines)
+    print(f"course table header line: {'found at line ' + str(header_idx) if header_idx is not None else 'NOT FOUND'}")
+    print(f"lines detected: {len(lines)}")
+    for i, line in enumerate(lines):
+        tag = "  <-- course table header" if i == header_idx else ""
+        print(f"  [{i:>3}] {mask_line_except_labels(line)}{tag}")
+    doc.close()
+
+
+# ===========================================================================
 # TKINTER GUI
 # ===========================================================================
 class ExtractorGUI(tk.Tk):
@@ -497,6 +569,21 @@ class ExtractorGUI(tk.Tk):
 # ENTRY POINT
 # ===========================================================================
 def main():
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--debug":
+        if len(sys.argv) < 3:
+            print("Usage: --debug <pdf_file_or_folder> [page_number]")
+            return
+        target = Path(sys.argv[2])
+        page_num = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+        pdf_files = [target] if target.is_file() else sorted(target.rglob("*.pdf"))
+        if not pdf_files:
+            print(f"No PDF files found at: {target}")
+            return
+        for pdf in pdf_files:
+            debug_page(pdf, page_num)
+        return
+
     app = ExtractorGUI()
     app.mainloop()
 
