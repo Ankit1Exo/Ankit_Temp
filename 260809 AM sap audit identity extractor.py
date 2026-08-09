@@ -1,80 +1,67 @@
 """
 SAP Audit Identity Extractor -- Tkinter GUI
 ==========================================================
-Pulls the student identity fields out of "Satisfactory Academic Progress
-Audit Report" PDFs. Only the student header line is read -- the course
-table below it (DHSC-821, term, grade, credits, ...) is ignored.
+Extracts the student ID, SSN and Name from "Satisfactory Academic Progress
+Audit Report" PDFs into an Excel workbook.
 
-HOW A STUDENT LINE IS FOUND
-    Every line of every page is read, and ANY line containing a value
-    shaped like an SSN is treated as a student line. Nothing else is
-    required -- no report title, no "ID SSN Name" caption row, no
-    "Academic Program" caption. Earlier versions gated on those and
-    silently skipped whole files whose pages didn't carry them.
+THE PAGE STRUCTURE THIS READS
+    Each page repeats a four-line block of headings, and the student data
+    follows the row of dashes:
 
-    Recognised SSN shapes:
-        123-45-6789     dashed (the normal case)
-        XXX-XX-6789     partially masked
-        123456789       running, when whitespace proves where it
-                        starts and ends
+        line 1    ID SSN     Name    Incl Incl  GPA   GPA  ...     <- captions
+        line 2    Att                                              <- wrapped caption
+        line 3    Course Name  Term/Dt  Grd Cum  Eval  Credits ... <- captions
+        line 4    -----------------------------------------       <- separator
+        ---->     1234567 123-45-6789 Mrs. Jane D. Smith  Academic Program: ...
+                  #Excluded Remedial Credits    SAP Type: DHDHS  ...
+                  DHSC-821  21FA2  A  Yes  No   3.00  12.00000  ...
 
-    Each page is read through TWO independent extraction paths -- words
-    grouped by position, and PyMuPDF's own text layer -- and the results
-    are merged and de-duplicated. If one path renders a page badly the
-    other usually still finds the line.
+    Everything after the dashes is data. A student's ID, SSN and Name are
+    all on ONE line, in that order. The lines below it -- the wrapped tail
+    of a long line, the "#Excluded Remedial Credits" row, and the course
+    rows -- belong to that student but hold nothing this script wants.
 
-WHAT IS TAKEN FROM THAT LINE
-    ID    -- everything printed to the left of the SSN.
-    SSN   -- kept EXACTLY as printed, dashed or running. It is never
-             reformatted, so the output matches the source document
-             character for character.
-    Name  -- everything to the right of the SSN, up to the end of the
-             name (see below), with any Mr./Mrs./Ms./Miss/Dr. prefix
-             moved to its own "Prefix" column, then split into three:
+HOW A LINE IS REBUILT
+    Words are grouped into printed lines strictly by VERTICAL POSITION,
+    using a tolerance derived from the page's own glyph height. PyMuPDF's
+    built-in line breaking is deliberately not used: on a report this wide
+    it emits text in the PDF's internal block order, which pulled words
+    from the course headings and the "#Excluded Remedial Credits" row into
+    the student line and produced names like "Credits Remedial".
 
-               with a middle initial   "Jane D. Smith"
-                   First Name = Jane      Middle = D.     Last Name = Smith
-               without one             "Jane Smith"
-                   First Name = Jane      Middle = (blank) Last Name = Smith
+HOW A LINE IS SPLIT
+    ID    -- everything to the left of the SSN. Kept as printed.
+    SSN   -- the first SSN-shaped value on the line: 123-45-6789, a masked
+             XXX-XX-6789, or a running 123456789. Written out EXACTLY as
+             printed -- never reformatted.
+    Name  -- what follows the SSN, stopping at the "Academic Program"
+             caption, at any other known caption, at the report's own
+             vocabulary (Credits, Remedial, Excluded, ...), or at a token
+             holding a digit -- whichever comes first.
 
-             i.e. when an initial is present it is the split point -- what
-             precedes it is the first name, what follows it is the last
-             name. With no initial the first space is the split point.
+             The heading line's "Incl" column marks where the Name column
+             ends, but that edge is only WARNED about, never enforced:
+             cutting names at it truncated "Samuel P. Okonkwo Jr." and, on
+             pages whose heading geometry did not line up with the data,
+             removed names entirely.
 
-WHERE THE NAME ENDS
-    "Academic Program:" is the preferred boundary, but it is not on every
-    line, so the name stops at whichever of these comes first, and the one
-    used is recorded in the "Name Boundary" column:
-        1. the "Academic Program" caption          (preferred)
-        2. another known caption (SAP Type, ...)
-        3. a token containing a digit or "("       (flagged)
-        4. any other "Something:" caption          (flagged)
-        5. the end of the line
-    Rules 3 and 4 mean the layout differed from the sample, so those rows
-    get an Extraction Note -- check them by hand.
+    The name then has any Mr./Mrs./Ms./Miss/Dr. prefix moved to its own
+    column and is split three ways:
 
-A field that can't be located is left blank and the reason goes in
-"Extraction Notes" rather than being guessed at. Treat any row with a
-note as needing a manual look.
+        with a middle initial   "Jane D. Smith"
+            First Name = Jane      Middle = D.      Last Name = Smith
+        without one             "Jane Smith"
+            First Name = Jane      Middle = (blank) Last Name = Smith
 
-TWO EXTRA RULES THE "ANY SSN-SHAPED LINE" TRIGGER NEEDS
-    - A line must have a NAME after the SSN. Without this, a captioned
-      field elsewhere on the page ("SSN: 123-45-6789") becomes a row with
-      every name column blank. The number of lines rejected this way is
-      printed at the end, so nothing disappears silently.
-    - The same student seen by both extraction paths is merged into one
-      row, keyed on file + page + ID + SSN. Where the two paths read the
-      NAME differently, the better-scoring reading is kept and the
-      disagreement is recorded in the Extraction Notes.
+    i.e. an initial, when present, is the split point: what precedes it is
+    the first name, what follows it is the last name. With no initial the
+    first space is the split point.
 
-TWO CONSEQUENCES OF THE "ANY SSN-SHAPED LINE" RULE
-    - A student whose SSN is blank on the report will NOT be picked up,
-      because there is nothing to trigger on. The run prints a WARNING
-      with a count of lines that look like students but carry no SSN, so
-      this gap is visible rather than silent.
-    - A non-SAP PDF sitting in the source folder (a W2, a transcript) WILL
-      contribute rows, since it also contains SSNs. Point the source
-      folder at SAP audit reports only.
+VALIDITY
+    A line becomes a row only if it has an SSN AND a name that survives
+    the boundary rules. Rows are then de-duplicated per page on the SSN.
+    Anything a rule could not resolve is left blank with the reason in
+    "Extraction Notes" -- treat any row with a note as needing a look.
 
 GUI:
     - Source folder picker (scanned recursively for PDFs)
@@ -84,16 +71,13 @@ GUI:
 USAGE:
     python "260809 AM sap audit identity extractor.py"
     python "260809 AM sap audit identity extractor.py" --diagnose <pdf_or_folder>
-    python "260809 AM sap audit identity extractor.py" --debug <pdf_or_folder> [page_number]
+    python "260809 AM sap audit identity extractor.py" --debug <pdf_or_folder> [page]
 
---diagnose answers "why did this file produce no rows?": per page it
-reports the size of the text layer, how many lines each extraction path
-saw, and how many student lines were found. --debug dumps every line of
-one page.
-
-Both print values masked to their digit/letter shape (#/X) with only the
-known report captions left readable, so a layout problem can be diagnosed
-and pasted into a ticket without exposing PII.
+--diagnose reports, per page, whether the heading line and the dashes were
+found, how many lines were rebuilt, and how many students came out.
+--debug dumps every rebuilt line of one page. Both mask values to their
+digit/letter shape (#/X) and leave only the report's own captions
+readable, so output can be pasted into a ticket without exposing PII.
 
 REQUIREMENTS:
     pip install pymupdf pandas openpyxl tqdm
@@ -124,30 +108,40 @@ from tqdm import tqdm
 MIN_TEXT_CHARS_PER_PAGE = 20
 OUTPUT_XLSX_NAME = "sap_audit_identity.xlsx"
 
+# Fraction of the page's median glyph height used as the vertical
+# tolerance when grouping words into a printed line. Comfortably absorbs
+# the sub-point jitter inside one line while staying well under the gap
+# to the next line.
+LINE_TOLERANCE_RATIO = 0.4
+
+# A word may start slightly left of its heading caption (numeric columns
+# are often right-aligned), so column tests allow this much slack.
+COLUMN_PAD = 4
+
 # No \b in front: on a fused "1234567123-45-6789" the ID runs straight
-# into the SSN, and a word boundary would refuse to match mid-digits.
-# X and * are allowed so a partially masked SSN ("XXX-XX-6789") is still
-# recognised and carried through as printed.
+# into the SSN and a word boundary would refuse to match mid-digits.
+# X and * are allowed so a masked SSN is still recognised, and carried
+# through exactly as printed.
 SSN_DASHED_RE = re.compile(r"[0-9X*]{3}-[0-9X*]{2}-[0-9X*]{4}")
 
-# The undashed form, only where whitespace (or the line edge) proves where
-# it starts and ends -- otherwise a 9-digit run could be the tail of a
-# longer number.
-SSN_PLAIN_RE = re.compile(r"(?<!\S)(\d{9})(?!\S)")
+# The running form, only where whitespace or the word edge proves where it
+# starts and ends -- otherwise a 9-digit run could be part of a longer
+# number.
+SSN_PLAIN_RE = re.compile(r"(?<!\d)(\d{9})(?!\d)")
 
-# Requiring a period OR a following capital matters: a bare
+# Requiring a period or a following capital matters: a bare
 # "^(Mr|Mrs|Ms|Dr)" would also strike the first two letters off real
 # surnames such as "Mroz" or "Drury".
 HONORIFIC_RE = re.compile(r"^((?:Mr|Mrs|Ms|Miss|Dr|Prof)\.?)(?:\s+|(?=[A-Z]))")
 
-# A middle initial: one letter, period optional.
 INITIAL_RE = re.compile(r"^[A-Za-z]\.?$")
 
 NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
 
-# Captions that can follow the name on the student line. "Academic
-# Program" is listed first only for readability -- the earliest match on
-# the line wins regardless of order here.
+# A row of the course table: "DHSC-821", "DHSC 821".
+COURSE_ROW_RE = re.compile(r"^[A-Za-z]{2,6}[- ]?\d{3}\b")
+
+# Captions that can follow the name on the student line.
 KNOWN_TRAILING_CAPTIONS = [
     ["academic", "program"],
     ["sap", "type"],
@@ -157,19 +151,17 @@ KNOWN_TRAILING_CAPTIONS = [
     ["degree"],
     ["major"],
 ]
-
+KNOWN_CAPTION_LABELS = {" ".join(c) for c in KNOWN_TRAILING_CAPTIONS}
 PREFERRED_BOUNDARY = "academic program"
 
-# Words that belong to the report's own furniture, never to a student's
-# name. A name is cut at the first of these. This is what stops an
-# interleaved reading -- where column text from another line lands beside
-# the SSN -- from being written out as a name like "Credits Remedial".
+# The report's own vocabulary, which never belongs to a student's name.
 # Deliberately excludes words that are also real surnames (Page, Grade,
-# Young, ...), so it can only ever cut report text, not a person.
+# Young, ...) so this can only ever cut report text, never a person.
 REPORT_STOP_WORDS = {
     "credits", "credit", "remedial", "excluded", "gpa", "cmpl", "pgm", "incl", "eval",
     "grd", "cum", "att", "earn", "ssn", "dhdhs", "cred", "attempted", "sciences",
     "term/dt", "transfer", "satisfactory", "audit", "batch", "verified", "skipped",
+    "section", "exists", "doctor", "health",
 }
 
 OUTPUT_COLUMNS = [
@@ -181,57 +173,40 @@ OUTPUT_COLUMNS = [
 
 
 # ===========================================================================
-# READING LINES OFF A PAGE
+# 1. REBUILDING PRINTED LINES FROM WORD POSITIONS
 # ===========================================================================
-def group_words_into_lines(words, overlap_ratio=0.5):
-    """words: PyMuPDF page.get_text('words') output. Returns a list of
-    lines, each a list of (x0, x1, text) tuples sorted left to right.
+def page_lines(page):
+    """Every printed line on the page, top to bottom, each as a list of
+    (x0, x1, text) sorted left to right.
 
-    Words are grouped by how much their vertical extents OVERLAP, not by
-    rounding y into fixed buckets. Bucketing looks simpler but silently
-    tears a line in half whenever its words straddle a bucket edge: real
-    text layers carry sub-point jitter, so y=17.4 and y=17.6 -- the same
-    printed line -- can round into different buckets and become two lines.
-    On this report that put the ID and SSN in one fragment and the name in
-    another, blanking every ID and dropping students outright."""
-    items = sorted(((w[1], w[3], w[0], w[2], w[4]) for w in words), key=lambda t: (t[0], t[2]))
-    lines = []
-    for y0, y1, x0, x1, text in items:
-        for line in reversed(lines):
-            overlap = min(y1, line["bottom"]) - max(y0, line["top"])
-            smaller = min(y1 - y0, line["bottom"] - line["top"])
-            if smaller > 0 and overlap / smaller >= overlap_ratio:
-                line["words"].append((x0, x1, text))
-                line["top"], line["bottom"] = min(line["top"], y0), max(line["bottom"], y1)
-                break
+    Grouping is by the vertical centre of each word against a tolerance
+    scaled to the page's own median glyph height, so it adapts to whatever
+    point size the report was printed at. Words are compared to the
+    ANCHOR of the line they might join -- the first word's centre -- not
+    to the previous word, so a run of slightly drifting words cannot chain
+    two printed lines together."""
+    words = page.get_text("words")
+    if not words:
+        return []
+
+    heights = sorted(w[3] - w[1] for w in words)
+    median_height = heights[len(heights) // 2] or 1.0
+    tolerance = median_height * LINE_TOLERANCE_RATIO
+
+    items = sorted(((w[1] + w[3]) / 2.0, w[0], w[2], w[4]) for w in words)
+
+    lines, current, anchor = [], [], None
+    for centre, x0, x1, text in items:
+        if anchor is None or centre - anchor <= tolerance:
+            if anchor is None:
+                anchor = centre
+            current.append((x0, x1, text))
         else:
-            lines.append({"top": y0, "bottom": y1, "words": [(x0, x1, text)]})
-
-    lines.sort(key=lambda ln: ln["top"])
-    return [sorted(ln["words"], key=lambda t: t[0]) for ln in lines]
-
-
-def normalise(text):
-    return " ".join(text.split()).lower()
-
-
-def lines_by_word_position(page):
-    """Primary path: words grouped by geometry. Reconstructs each printed
-    line as it actually appears, which is what keeps a student's ID, SSN
-    and name together."""
-    return [line_text(ln) for ln in group_words_into_lines(page.get_text("words"))]
-
-
-def lines_by_text_layer(page):
-    """Fallback path: PyMuPDF's own line breaks.
-
-    Used ONLY when the primary path finds nothing on a page. It is not
-    merged with the primary path, because on a wide columnar report like
-    this one it interleaves text from different columns -- which produced
-    rows carrying a student's first name in the ID column and the report's
-    own words ("Credits Remedial") as the name. It stays as a fallback
-    because it can still rescue a page whose word geometry is unusable."""
-    return [t.strip() for t in page.get_text("text").splitlines() if t.strip()]
+            lines.append(sorted(current, key=lambda t: t[0]))
+            current, anchor = [(x0, x1, text)], centre
+    if current:
+        lines.append(sorted(current, key=lambda t: t[0]))
+    return lines
 
 
 def line_text(line):
@@ -239,12 +214,97 @@ def line_text(line):
 
 
 # ===========================================================================
-# NAME BOUNDARY
+# 2. FINDING THE PAGE STRUCTURE
 # ===========================================================================
+def find_heading_columns(lines):
+    """The x-positions of the captions on the heading line
+    ("ID SSN Name Incl ...").
+
+    Returns {"id", "ssn", "name", "name_end"} or None. "name_end" is the x
+    of the caption AFTER Name -- normally "Incl" -- and is the right-hand
+    boundary of the Name column, which is what keeps the Academic Program
+    text out of the name."""
+    for line in lines:
+        tokens = [t.strip(":").lower() for _, _, t in line]
+        for i in range(len(tokens) - 2):
+            if tokens[i:i + 3] == ["id", "ssn", "name"]:
+                after = line[i + 3][0] if i + 3 < len(line) else None
+                return {"id": line[i][0], "ssn": line[i + 1][0],
+                        "name": line[i + 2][0], "name_end": after}
+    return None
+
+
+def is_separator(line):
+    """The row of dashes that closes the headings. Allows for the report
+    wrapping it across more than one printed line."""
+    text = line_text(line).replace(" ", "")
+    return len(text) >= 8 and text.count("-") >= len(text) * 0.9
+
+
+def data_region(lines):
+    """The lines after the dashes. If a page has no dashes -- continuation
+    pages sometimes don't -- every line is treated as data rather than
+    dropping the page."""
+    for index, line in enumerate(lines):
+        if is_separator(line):
+            return lines[index + 1:]
+    return lines
+
+
+def is_not_student_line(text):
+    """Rows inside a student's block that are definitely not the student
+    line: the excluded-credits row and the course table."""
+    stripped = text.lstrip()
+    return stripped.startswith("#") or bool(COURSE_ROW_RE.match(stripped))
+
+
+# ===========================================================================
+# 3. SPLITTING A STUDENT LINE
+# ===========================================================================
+def locate_ssn(line):
+    """Find the SSN among a line's words.
+
+    Returns (word_index, before_text, ssn_text, after_text) where `before`
+    and `after` are any part of that same word either side of the SSN --
+    the report can print the ID fused to the SSN. Returns None if the line
+    holds no SSN."""
+    for index, (_, _, text) in enumerate(line):
+        match = SSN_DASHED_RE.search(text) or SSN_PLAIN_RE.search(text)
+        if match:
+            return index, text[:match.start()], match.group(0), text[match.end():]
+    return None
+
+
+def name_tokens_after(line, ssn_index, after):
+    """The words to the right of the SSN, as (token, x) pairs. `after` is
+    any tail of the SSN's own word, which shares that word's x."""
+    tokens, xs = [], []
+    if after:
+        tokens.append(after)
+        xs.append(line[ssn_index][0])
+    for x0, _, text in line[ssn_index + 1:]:
+        tokens.append(text)
+        xs.append(x0)
+    return tokens, xs
+
+
+def overflows_name_column(xs, stop, columns):
+    """True if the chosen name runs past the Name column's right edge.
+
+    This is reported, never enforced. Cutting the name at the column edge
+    was tried and was wrong twice: it truncated "Samuel P. Okonkwo Jr." to
+    "... Okonkwo", and on pages whose heading geometry didn't line up with
+    the data it removed the name outright. The caption and report-word
+    rules do the real work; the column edge only earns a warning."""
+    if not columns or not columns["name_end"] or stop == 0:
+        return False
+    return max(xs[:stop]) >= columns["name_end"] - COLUMN_PAD
+
+
 def find_name_stop(tokens):
-    """Where the name ends within `tokens`. Returns (stop_index, reason).
-    Every rule is evaluated and the EARLIEST stop wins, so a caption late
-    on the line can't pull the name past a digit that came first."""
+    """Where the name ends within `tokens`. Returns (index, reason). Every
+    rule is evaluated and the EARLIEST stop wins, so a caption late on the
+    line cannot pull the name past a digit that came first."""
     norm = [t.strip(":").lower() for t in tokens]
     best_index, best_reason = len(tokens), "end of line"
 
@@ -259,8 +319,7 @@ def find_name_stop(tokens):
             if norm[i:i + width] == caption:
                 offer(i, label)
                 break
-        # PDF text extraction sometimes fuses a tightly kerned two-word
-        # caption into one token ("AcademicProgram").
+        # Tight kerning sometimes fuses a two-word caption into one token.
         if width > 1:
             fused = "".join(caption)
             for i, token in enumerate(norm):
@@ -286,15 +345,19 @@ def find_name_stop(tokens):
     return best_index, best_reason
 
 
-# ===========================================================================
-# NAME SPLITTING
-# ===========================================================================
+def strip_prefix(name):
+    """(prefix, name_without_prefix). Handles "Mrs. Jane" and the fused
+    "Mrs.Jane" that tight kerning produces."""
+    match = HONORIFIC_RE.match(name)
+    if not match:
+        return "", name.strip()
+    return match.group(1), name[match.end():].strip()
+
+
 def split_name(name, notes):
-    """Split a prefix-free name into (first, middle, last) per the rules
-    in the module docstring."""
+    """Split a prefix-free name into (first, middle, last)."""
     tokens = name.split()
     if not tokens:
-        notes.append("no name text found after the SSN")
         return "", "", ""
 
     if any("," in t for t in tokens):
@@ -308,20 +371,17 @@ def split_name(name, notes):
         notes.append("name is a single word -- put in First Name, Last Name left blank")
         return tokens[0], "", ""
 
-    # A middle initial only counts if it isn't the first token and isn't
-    # the last -- a trailing lone letter ("Mroz Dana K") has no surname
-    # after it to split off, so it can't be the split point.
+    # An initial only counts as the split point if it is neither the first
+    # token nor the last -- a trailing lone letter ("Mroz Dana K") has no
+    # surname after it to split off.
     start = next((i for i in range(1, len(tokens) - 1) if INITIAL_RE.match(tokens[i])), None)
 
     if start is None:
         if INITIAL_RE.match(tokens[-1]):
             notes.append(f"name ends in a lone initial ('{tokens[-1]}') with nothing after it -- "
                          "treated as part of the last name, not as a middle initial")
-        # No initial: first token is the first name, the remainder is the
-        # last name.
         return tokens[0], "", " ".join(tokens[1:])
 
-    # Consecutive initials ("Jane D. K. Smith") are all middle.
     end = start
     while end + 1 < len(tokens) - 1 and INITIAL_RE.match(tokens[end + 1]):
         end += 1
@@ -329,164 +389,89 @@ def split_name(name, notes):
     return " ".join(tokens[:start]), " ".join(tokens[start:end + 1]), " ".join(tokens[end + 1:])
 
 
-def strip_prefix(name):
-    """Returns (prefix, name_without_prefix). Handles both 'Mrs. Jane'
-    and the fused 'Mrs.Jane' that tight kerning can produce."""
-    match = HONORIFIC_RE.match(name)
-    if not match:
-        return "", name.strip()
-    return match.group(1), name[match.end():].strip()
-
-
-# ===========================================================================
-# STUDENT LINE PARSING
-# ===========================================================================
-def find_ssn(text):
-    """The first SSN-shaped value on the line, as (start, end, ssn), or
-    None. Dashed wins over running: a dashed match is unambiguous, while a
-    bare 9-digit run needs whitespace on both sides to be trustworthy."""
-    match = SSN_DASHED_RE.search(text)
-    if match:
-        return match.start(), match.end(), match.group(0)
-    match = SSN_PLAIN_RE.search(text)
-    if match:
-        return match.start(1), match.end(1), match.group(1)
-    return None
-
-
-def parse_student_line(text):
-    """One student row from a line of text, or None if the line carries no
-    SSN-shaped value (and so isn't a student line)."""
-    found = find_ssn(text)
-    if found is None:
+def parse_student_line(line, columns):
+    """One student row from a rebuilt line, or None if the line is not a
+    student line."""
+    text = line_text(line)
+    if is_not_student_line(text):
         return None
-    start, end, ssn_text = found
 
-    id_text, name_text = text[:start].strip(), text[end:].strip()
-
-    # An SSN with no name after it isn't a student line -- it's an SSN
-    # printed under a caption somewhere else ("SSN: 123-45-6789"). Skip it
-    # rather than emit a row with every name column blank. The count of
-    # lines rejected here is reported, so nothing is dropped silently.
-    if not re.search(r"[A-Za-z]", name_text):
+    located = locate_ssn(line)
+    if located is None:
         return None
+    ssn_index, before, ssn_text, after = located
 
     notes = []
     row = {col: "" for col in OUTPUT_COLUMNS}
     row["SSN"] = ssn_text
 
-    # The ID is whatever sits left of the SSN. More than one token there
-    # means something extra was printed in that space, so keep the token
-    # nearest the SSN and say so rather than gluing them together.
-    id_tokens = id_text.split()
+    # --- ID: everything left of the SSN, plus any digits fused in front
+    #     of it within the same word.
+    id_tokens = [t for _, _, t in line[:ssn_index]]
+    if before:
+        id_tokens.append(before)
     if not id_tokens:
         notes.append("no ID printed to the left of the SSN")
     else:
         row["ID"] = id_tokens[-1]
         if len(id_tokens) > 1:
             notes.append(f"{len(id_tokens)} tokens found left of the SSN "
-                         f"('{id_text}') -- took the one nearest the SSN as the ID")
+                         f"('{' '.join(id_tokens)}') -- took the one nearest the SSN as the ID")
 
-    name_tokens = name_text.split()
-    stop, reason = find_name_stop(name_tokens)
+    # --- Name: everything right of the SSN, cut by the caption rules.
+    #
+    # The caption rules run on the UNCUT token list. Applying the column
+    # edge first would hide "Academic Program" from them -- chopping
+    # "Program:" off leaves a bare "Academic", which matches no caption
+    # and lands in the name.
+    tokens, xs = name_tokens_after(line, ssn_index, after)
+    stop, reason = find_name_stop(tokens)
 
-    prefix, full_name = strip_prefix(" ".join(name_tokens[:stop]))
+    prefix, full_name = strip_prefix(" ".join(tokens[:stop]))
 
-    # Nothing survived the cut, so whatever followed the SSN was report
-    # text, not a person -- an interleaved reading such as
-    # "... 555-11-1427 Credits Remedial ...". Reject the whole row: an
-    # earlier version emitted these with a blank name and the student's
-    # first name sitting in the ID column.
+    # Nothing survived, so what followed the SSN was report text, not a
+    # person. Reject the row rather than emit a blank name beside a real
+    # SSN.
     if not full_name:
         return None
 
     row["Name Boundary"] = reason
-    if reason.startswith("a token containing") or reason.startswith("an unrecognised caption"):
-        notes.append(f"name ended at {reason} rather than the 'Academic Program' caption -- "
-                     "verify the name is complete and has nothing extra")
-    if reason.startswith("report text"):
-        notes.append(f"name was cut at {reason} -- the extracted line mixed in text from another "
-                     "column; verify the name against the PDF")
-
     row["Prefix"] = prefix
     row["Full Name"] = full_name
-    row["First Name"], row["Middle"], row["Last Name"] = split_name(full_name, notes)
+    if reason.startswith("report text"):
+        notes.append(f"name was cut at {reason} -- the line mixed in text from another column; "
+                     "verify the name against the PDF")
+    elif reason.startswith("a token containing") or reason.startswith("an unrecognised caption"):
+        notes.append(f"name ended at {reason} rather than the 'Academic Program' caption -- "
+                     "verify the name is complete and has nothing extra")
+    if overflows_name_column(xs, stop, columns):
+        notes.append("name runs past the right edge of the Name column on the heading line -- "
+                     "either it is simply a long name, or text from the next column was picked "
+                     "up; verify against the PDF")
 
+    row["First Name"], row["Middle"], row["Last Name"] = split_name(full_name, notes)
     row["Extraction Notes"] = "; ".join(notes)
     return row
 
 
 # ===========================================================================
-# MERGING THE TWO EXTRACTION PATHS
+# 4. PER-PAGE AND PER-FILE DRIVERS
 # ===========================================================================
-KNOWN_CAPTION_LABELS = {" ".join(c) for c in KNOWN_TRAILING_CAPTIONS}
-
-
 def row_score(row):
-    """How much to trust a row, for picking between two readings of the
-    same student. A numeric ID matters most: an interleaved reading tends
-    to leave a word (part of the name, or report text) where the ID should
-    be, so "1237906" beating "Birtukhan" is the single strongest signal
-    that a row was assembled correctly."""
+    """Which reading of one SSN to trust. A numeric ID matters most: a
+    mis-assembled row leaves a word where the ID should be."""
     boundary = row["Name Boundary"]
-    if boundary == PREFERRED_BOUNDARY:
-        rank = 3
-    elif boundary in KNOWN_CAPTION_LABELS:
-        rank = 2
-    elif boundary == "end of line":
-        rank = 1
-    else:
-        rank = 0
+    rank = (3 if boundary == PREFERRED_BOUNDARY else
+            2 if boundary in KNOWN_CAPTION_LABELS else
+            1 if boundary == "end of line" else 0)
     note_count = len([n for n in row["Extraction Notes"].split("; ") if n])
-    return (1 if row["ID"].isdigit() else 0,
-            1 if row["Full Name"] else 0,
-            rank, -note_count, len(row["Full Name"]))
-
-
-def candidate_name(text):
-    """The name-looking part of a line that carries no SSN, used only to
-    count how many DISTINCT students might have been missed.
-
-    Returns "" when there is no name on the line, which is what filters
-    out the bare "Academic Program: ..." fragments the second extraction
-    path produces: with the caption at token 0 the name stops at index 0
-    and nothing is left."""
-    body = re.sub(r"^\s*[\w-]*\d[\w-]*\s+", "", text)  # drop a leading ID-ish token
-    _, rest = strip_prefix(body.strip())
-    tokens = rest.split()
-    stop, _ = find_name_stop(tokens)
-    return " ".join(tokens[:stop]).strip().lower()
-
-
-def count_missed_students(candidates, found_names):
-    """How many distinct SSN-less students a page appears to hold, ignoring
-    those already extracted and collapsing the two extraction paths' views
-    of the same person."""
-    missed = set()
-    for text in candidates:
-        name = candidate_name(text)
-        if name and not any(name in f or f in name for f in found_names):
-            missed.add(name)
-    return len(missed)
+    return (1 if row["ID"].isdigit() else 0, rank, -note_count, len(row["Full Name"]))
 
 
 def dedupe_rows(rows):
-    """Collapse the same student seen by both extraction paths into one
-    row. The paths often break a line at different points, so the two
-    readings are not textually identical even though they describe the
-    same student -- de-duplicating on the text would miss them, so this
-    keys on the student instead.
-
-    Where the readings disagree on the NAME, the better-scoring one is
-    kept and the disagreement is recorded, because that is exactly the
-    case a human should look at.
-
-    The key is file + page + SSN, deliberately NOT including the ID. A
-    badly assembled row tends to carry the WRONG ID -- a fragment of the
-    name, or a report word -- so keying on the ID would let the good and
-    the bad reading of one student sit side by side in the output as two
-    rows with the same SSN, which is precisely the duplicate that showed
-    up in the workbook."""
+    """One row per SSN per page. Keyed on the SSN and NOT the ID, because a
+    mis-assembled row carries the wrong ID -- keying on it would let a good
+    and a bad reading of one student both reach the workbook."""
     groups, order = {}, []
     for row in rows:
         key = (row["File Name"], row["Page Number"], row["SSN"])
@@ -499,86 +484,65 @@ def dedupe_rows(rows):
     for key in order:
         variants = groups[key]
         best = max(variants, key=row_score)
-        readings = {(v["ID"], v["Full Name"]) for v in variants}
-        if len(readings) > 1:
+        if len({(v["ID"], v["Full Name"]) for v in variants}) > 1:
             best = dict(best)
-            others = sorted(f"{i or '(no ID)'} / {n or '(no name)'}"
-                            for i, n in readings if (i, n) != (best["ID"], best["Full Name"]))
+            discarded = sorted(f"{v['ID'] or '(no ID)'} / {v['Full Name'] or '(no name)'}"
+                               for v in variants
+                               if (v["ID"], v["Full Name"]) != (best["ID"], best["Full Name"]))
             note = (f"this SSN was read more than one way; kept the best-scoring reading and "
-                    f"discarded: {'; '.join(others)}")
+                    f"discarded: {'; '.join(discarded)}")
             best["Extraction Notes"] = "; ".join(x for x in [best["Extraction Notes"], note] if x)
         merged.append(best)
     return merged
 
 
-# ===========================================================================
-# PER-PDF DRIVER -- one row per student line
-# ===========================================================================
+def read_page(page, file_name, page_num):
+    """Returns (rows, heading_found, separator_found, line_count)."""
+    lines = page_lines(page)
+    columns = find_heading_columns(lines)
+    separator_found = any(is_separator(ln) for ln in lines)
+
+    rows = []
+    for line in data_region(lines):
+        try:
+            row = parse_student_line(line, columns)
+        except Exception as e:
+            row = {col: "" for col in OUTPUT_COLUMNS}
+            row["Extraction Notes"] = f"ERROR: {type(e).__name__}: {e}"
+        if row is None:
+            continue
+        row["File Name"], row["Page Number"] = file_name, page_num
+        rows.append(row)
+
+    return dedupe_rows(rows), columns is not None, separator_found, len(lines)
+
+
 def process_pdf(path: Path):
     doc = fitz.open(str(path))
-    rows, image_only_pages, nameless, ssnless = [], [], 0, 0
+    rows, image_only_pages, no_heading = [], [], 0
 
     for page_num, page in enumerate(doc, start=1):
         if len(page.get_text().strip()) < MIN_TEXT_CHARS_PER_PAGE:
             image_only_pages.append(page_num)
             continue
-
-        def read(lines):
-            """Parse one extraction path's lines into rows, counting the
-            SSN-bearing lines that had no usable name."""
-            found, skipped, maybe = [], 0, []
-            for text in lines:
-                if find_ssn(text) is None:
-                    # Detection keys on the SSN, so a student whose SSN is
-                    # blank on the report cannot be picked up. Hold on to
-                    # the lines that look like students anyway, so that
-                    # gap can be reported rather than passing silently.
-                    if "academic program" in text.lower() or HONORIFIC_RE.match(text):
-                        maybe.append(text)
-                    continue
-                try:
-                    row = parse_student_line(text)
-                except Exception as e:
-                    row = {col: "" for col in OUTPUT_COLUMNS}
-                    row["Extraction Notes"] = f"ERROR: {type(e).__name__}: {e}"
-                if row is None:
-                    skipped += 1
-                    continue
-                row["File Name"] = path.name
-                row["Page Number"] = page_num
-                found.append(row)
-            return found, skipped, maybe
-
-        # Word position first. Only if that finds nothing on this page is
-        # the text layer consulted -- merging the two produced interleaved
-        # rows on this report's wide columnar layout.
-        page_rows, skipped, candidates = read(lines_by_word_position(page))
-        if not page_rows:
-            page_rows, skipped, candidates = read(lines_by_text_layer(page))
-        nameless += skipped
-
-        # Most candidates are just the other extraction path's view of a
-        # student already captured above -- the same line broken at a
-        # different point, with the SSN in the other fragment. Counting
-        # distinct names, minus those already extracted, leaves only the
-        # genuinely missed students.
-        found_names = {r["Full Name"].lower() for r in page_rows if r["Full Name"]}
-        ssnless += count_missed_students(candidates, found_names)
+        page_rows, heading, _, _ = read_page(page, path.name, page_num)
+        if not heading:
+            no_heading += 1
         rows.extend(page_rows)
 
     doc.close()
-    return dedupe_rows(rows), image_only_pages, nameless, ssnless
+    return rows, image_only_pages, no_heading
 
 
 # ===========================================================================
-# MASKING (shared by --debug and --diagnose)
+# 5. MASKING (shared by --debug and --diagnose)
 # ===========================================================================
 KNOWN_DEBUG_LABELS = [
     "ID", "SSN", "Name", "Academic Program", "SAP Type", "Excluded Remedial Credits",
     "Course Name", "Term/Dt", "Grd", "Cum", "Eval", "Credits", "Grade Pts",
     "Report Options", "Batch ID", "Satisfactory Academic Progress Audit Report",
     "Detail of Results by Student by SAP Type", "Page", "Att", "Pgm", "Earn", "Cmpl", "GPA",
-    "Section skipped", "No Verified Grade Exists",
+    "Incl", "Section skipped", "No Verified Grade Exists", "Doctor of Health Sciences",
 ]
 
 
@@ -591,17 +555,17 @@ def mask_text_except_labels(text):
     lowered = [t.strip(":").lower() for t in tokens]
     is_label = [False] * len(tokens)
     for label in sorted(KNOWN_DEBUG_LABELS, key=len, reverse=True):
-        ltoks = label.lower().split()
-        width = len(ltoks)
+        parts = label.lower().split()
+        width = len(parts)
         for i in range(len(tokens) - width + 1):
-            if not any(is_label[i:i + width]) and lowered[i:i + width] == ltoks:
+            if not any(is_label[i:i + width]) and lowered[i:i + width] == parts:
                 for k in range(i, i + width):
                     is_label[k] = True
     return " ".join(t if is_label[k] else mask_shape(t) for k, t in enumerate(tokens))
 
 
 # ===========================================================================
-# DEBUG -- dump one page, masked
+# 6. DEBUG / DIAGNOSE
 # ===========================================================================
 def debug_page(path: Path, page_num: int):
     doc = fitz.open(str(path))
@@ -611,40 +575,40 @@ def debug_page(path: Path, page_num: int):
         return
 
     page = doc[page_num - 1]
-    text = page.get_text()
+    chars = len(page.get_text().strip())
     print(f"--- {path.name} page {page_num} ---")
-    print(f"text layer: {len(text.strip())} chars "
-          f"({'OK' if len(text.strip()) >= MIN_TEXT_CHARS_PER_PAGE else 'BELOW MIN -- image-only page'})")
+    print(f"text layer: {chars} chars "
+          f"({'OK' if chars >= MIN_TEXT_CHARS_PER_PAGE else 'BELOW MIN -- image-only page'})")
 
-    lines = lines_by_word_position(page)
-    students = [(i, parse_student_line(t)) for i, t in enumerate(lines)]
-    students = [(i, r) for i, r in students if r]
-    if not students:
-        print("word-position path found no students; showing the text-layer fallback instead")
-        lines = lines_by_text_layer(page)
-        students = [(i, r) for i, r in ((i, parse_student_line(t)) for i, t in enumerate(lines)) if r]
-    print(f"student lines detected: {len(students)}")
-    for i, row in students:
-        print(f"  student line [{i}]")
-        for key in ["ID", "SSN", "Prefix", "Full Name", "First Name", "Middle", "Last Name"]:
-            print(f"    {key}: {'(found)' if row[key] else '(blank)'}")
-        print(f"    name boundary: {row['Name Boundary']}")
+    lines = page_lines(page)
+    columns = find_heading_columns(lines)
+    separator_at = next((i for i, ln in enumerate(lines) if is_separator(ln)), None)
+    print(f"heading line 'ID SSN Name': {'found' if columns else 'NOT FOUND'}"
+          + (f" (Name column ends at x={columns['name_end']})"
+             if columns and columns["name_end"] else ""))
+    print(f"dashes separator: {'line ' + str(separator_at) if separator_at is not None else 'NOT FOUND'}")
+
+    rows, _, _, _ = read_page(page, path.name, page_num)
+    print(f"students found: {len(rows)}")
+    for row in rows:
+        print(f"  ID {'(found)' if row['ID'] else '(blank)'} | "
+              f"SSN {'(found)' if row['SSN'] else '(blank)'} | "
+              f"name {'(found)' if row['Full Name'] else '(blank)'} | "
+              f"boundary: {row['Name Boundary']}")
         if row["Extraction Notes"]:
             print(f"    notes: {row['Extraction Notes']}")
 
-    print(f"lines detected: {len(lines)}")
-    for i, t in enumerate(lines):
-        print(f"  [{i:>3}] {mask_text_except_labels(t)}")
+    print(f"lines rebuilt: {len(lines)}")
+    for i, line in enumerate(lines):
+        marker = "  <-- separator" if is_separator(line) else ""
+        print(f"  [{i:>3}] {mask_text_except_labels(line_text(line))}{marker}")
     doc.close()
 
 
-# ===========================================================================
-# DIAGNOSE -- why did a file yield no students? (PII-free)
-# ===========================================================================
 def diagnose(target: Path):
-    """Per-file account of what the extractor saw and where it stopped.
-    Prints no names, IDs or SSNs -- only counts, captions and masked
-    shapes -- so it can be pasted into a ticket safely."""
+    """Per-page account of what was found. No names, IDs or SSNs are
+    printed -- only counts, captions and masked shapes -- so the output is
+    safe to paste into a ticket."""
     pdfs = [target] if target.is_file() else sorted(target.rglob("*.pdf"))
     if not pdfs:
         print(f"No PDF files found at: {target}")
@@ -660,41 +624,31 @@ def diagnose(target: Path):
             chars = len(page.get_text().strip())
             if chars < MIN_TEXT_CHARS_PER_PAGE:
                 print(f"  page {page_num}: SKIPPED -- only {chars} chars of text. This page is a "
-                      f"scanned image with no text layer; it must be OCR'd before anything can "
-                      f"be read off it.")
+                      f"scanned image with no text layer and must be OCR'd first.")
                 continue
 
-            lines = lines_by_word_position(page)
-            path_used = "word-position"
-            matched = [r for r in (parse_student_line(t) for t in lines) if r]
-            if not matched:
-                lines = lines_by_text_layer(page)
-                path_used = "text-layer fallback"
-                matched = [r for r in (parse_student_line(t) for t in lines) if r]
+            rows, heading, separator, line_count = read_page(page, path.name, page_num)
+            total += len(rows)
+            print(f"  page {page_num}: {len(rows)} student(s)  "
+                  f"[{chars} chars, {line_count} lines rebuilt, "
+                  f"heading {'YES' if heading else 'no'}, dashes {'YES' if separator else 'no'}]")
 
-            for row in matched:
-                row["File Name"], row["Page Number"] = path.name, page_num
-            students = dedupe_rows(matched)
-            total += len(students)
-            print(f"  page {page_num}: {len(students)} student(s) "
-                  f"(from {len(matched)} matching line(s) before merge)  "
-                  f"[{chars} chars; {len(lines)} lines via {path_used}]")
-
-            if not students:
-                near = [t for t in lines if re.search(r"\d{3}[- ]?\d{2}[- ]?\d{4}", t)
-                        or HONORIFIC_RE.match(t)]
+            if not rows:
+                lines = data_region(page_lines(page))
+                near = [ln for ln in lines
+                        if locate_ssn(ln) or HONORIFIC_RE.match(line_text(ln))]
                 if not near:
-                    print("      no line on this page contains anything SSN-shaped or a "
+                    print("      no line after the dashes holds an SSN-shaped value or a "
                           "Mr./Mrs./Ms./Dr. prefix -- there is nothing here to extract")
-                for t in near[:5]:
-                    print(f"      near-miss: {mask_text_except_labels(t)}")
+                for line in near[:5]:
+                    print(f"      near-miss: {mask_text_except_labels(line_text(line))[:150]}")
 
-        print(f"  TOTAL: {total} student line(s) in this file\n")
+        print(f"  TOTAL: {total} student(s) in this file\n")
         doc.close()
 
 
 # ===========================================================================
-# EXTRACTION RUNNER (called from the GUI thread)
+# 7. EXTRACTION RUNNER
 # ===========================================================================
 def run_extraction(source_folder, dest_folder, status_callback):
     src, dst = Path(source_folder), Path(dest_folder)
@@ -718,18 +672,16 @@ def run_extraction(source_folder, dest_folder, status_callback):
         return False
     print(f"Found {len(pdfs)} PDF file(s).")
 
-    all_rows, no_students, image_only = [], [], []
-    total_nameless, total_ssnless = 0, 0
+    all_rows, no_students, image_only, headingless = [], [], [], 0
     with tqdm(pdfs, desc="Extracting", unit="pdf", ncols=100) as pbar:
         for pdf_path in pbar:
             pbar.set_postfix_str(pdf_path.name)
-            rows, image_pages, nameless, ssnless = process_pdf(pdf_path)
+            rows, image_pages, no_heading = process_pdf(pdf_path)
             if not rows:
                 no_students.append(pdf_path.name)
             if image_pages:
                 image_only.append(f"{pdf_path.name} (page(s) {', '.join(map(str, image_pages))})")
-            total_nameless += nameless
-            total_ssnless += ssnless
+            headingless += no_heading
             all_rows.extend(rows)
             status_callback(f"Processed {pdf_path.name} ({len(all_rows)} student(s) so far)")
 
@@ -739,44 +691,36 @@ def run_extraction(source_folder, dest_folder, status_callback):
         return False
 
     frame = pd.DataFrame(all_rows, columns=OUTPUT_COLUMNS)
-    # ID and SSN go out as text so Excel can't strip a leading zero or
-    # turn a running 9-digit SSN into a number in scientific notation.
+    # ID and SSN go out as text so Excel cannot strip a leading zero or
+    # turn a running 9-digit SSN into scientific notation.
     for col in ["ID", "SSN"]:
         frame[col] = frame[col].astype(str)
     frame.to_excel(output_path, index=False)
 
     flagged = sum(1 for r in all_rows if r["Extraction Notes"])
-    unique = len({(r["ID"], r["SSN"]) for r in all_rows})
     files_with_rows = len({r["File Name"] for r in all_rows})
-    print(f"\nDone. {len(all_rows)} student row(s) ({unique} unique ID+SSN) "
-          f"from {files_with_rows} of {len(pdfs)} file(s) -> {output_path}")
+    print(f"\nDone. {len(all_rows)} student row(s) from {files_with_rows} of {len(pdfs)} "
+          f"file(s) -> {output_path}")
 
     boundaries = {}
     for r in all_rows:
         boundaries[r["Name Boundary"]] = boundaries.get(r["Name Boundary"], 0) + 1
-    print("Name boundary used:")
+    print("Where the name ended:")
     for reason, count in sorted(boundaries.items(), key=lambda kv: -kv[1]):
         marker = "" if reason == PREFERRED_BOUNDARY else "   <-- not the 'Academic Program' caption"
         print(f"  {count:>5}  {reason}{marker}")
 
     if flagged:
         print(f"{flagged} row(s) have a non-empty 'Extraction Notes' -- spot-check those.")
-    if total_nameless:
-        print(f"{total_nameless} line(s) held an SSN with no name after it and were suppressed. "
-              f"These are normal: the text layer often breaks the student line across the wide "
-              f"gap before the Name column, leaving an 'ID + SSN' fragment. The same student is "
-              f"read in full by the other extraction path, so nothing is lost -- without this "
-              f"they would appear as duplicate rows with a blank name.")
-    if total_ssnless:
-        print(f"\nWARNING: {total_ssnless} line(s) look like student lines (a name prefix or an "
-              f"'Academic Program' caption) but carry NO SSN, so they were not extracted -- "
-              f"detection keys on the SSN. Check these by hand if students can have a blank SSN.")
+    if headingless:
+        print(f"{headingless} page(s) had no 'ID SSN Name' heading line, so the Name column's "
+              f"right edge was unknown and caption rules were used instead.")
     if image_only:
         print(f"\nSCANNED PAGES WITH NO TEXT LAYER (nothing can be read off these until they are "
               f"OCR'd):\n  {'; '.join(image_only)}")
     if no_students:
         print(f"\n{len(no_students)} file(s) produced no rows: {', '.join(no_students)}")
-        print("   -> run with --diagnose <folder> to see, per page, why. The output is PII-free.")
+        print("   -> run with --diagnose <folder> to see why, per page. The output is PII-free.")
 
     status_callback(f"Done. {len(all_rows)} student(s) written to {output_path.name} "
                     f"({flagged} flagged for review).")
@@ -784,7 +728,7 @@ def run_extraction(source_folder, dest_folder, status_callback):
 
 
 # ===========================================================================
-# TKINTER GUI
+# 8. TKINTER GUI
 # ===========================================================================
 class ExtractorGUI(tk.Tk):
     def __init__(self):
@@ -825,14 +769,16 @@ class ExtractorGUI(tk.Tk):
         self.columnconfigure(1, weight=1)
 
     def _pick_source(self):
-        folder = filedialog.askdirectory(title="Select folder containing SAP audit report PDFs", mustexist=True)
+        folder = filedialog.askdirectory(title="Select folder containing SAP audit report PDFs",
+                                         mustexist=True)
         if folder:
             self.src_var.set(folder)
             if not self.dst_var.get():
                 self.dst_var.set(folder)
 
     def _pick_destination(self):
-        folder = filedialog.askdirectory(title="Select destination folder for the output XLSX", mustexist=False)
+        folder = filedialog.askdirectory(title="Select destination folder for the output XLSX",
+                                         mustexist=False)
         if folder:
             self.dst_var.set(folder)
 
@@ -871,7 +817,7 @@ class ExtractorGUI(tk.Tk):
 
 
 # ===========================================================================
-# ENTRY POINT
+# 9. ENTRY POINT
 # ===========================================================================
 def main():
     import sys
