@@ -172,6 +172,16 @@ def normalize_ssn_digits(s):
     return re.sub(r"\D", "", s or "")
 
 
+def reformat_last_first_name(name_text):
+    """"Lastname, Firstname Middle" -> "Firstname Middle Lastname". Only
+    reorders when a comma is actually present, so it's a no-op on names
+    that already print in the other order."""
+    if "," not in name_text:
+        return name_text
+    last, _, rest = name_text.partition(",")
+    return f"{rest.strip()} {last.strip()}".strip()
+
+
 # ===========================================================================
 # PAGE CLASSIFICATION
 # ===========================================================================
@@ -188,6 +198,12 @@ def classify_page(lines):
 # LAYOUT A ("summary") -- full name (with full middle name) + SSN/Student ID
 # ===========================================================================
 def parse_layout_a(lines):
+    """The name on this layout is printed as "Lastname, Firstname Middle"
+    on the SAME line as the DOB/Student ID/Print Date captions (confirmed
+    against a real file's masked debug output) -- not on a separate line
+    above it. Reformatted here to "Firstname Middle Lastname" to match
+    typical name-column conventions; if that's not wanted, the raw
+    "Lastname, Firstname Middle" form is easy to keep instead."""
     result = {"Student ID": "", "SSN": "", "Full Name": ""}
     notes = []
 
@@ -198,22 +214,19 @@ def parse_layout_a(lines):
             header_idx = idx
             vals, _ = label_values(line, ["DOB", "Student ID", "Print Date"])
             result["Student ID"] = " ".join(t for _, _, t in vals.get("Student ID", []))
+
+            name_words = left_of_first_label(line, ["DOB", "Student ID", "Print Date"])
+            name_text = " ".join(t for _, _, t in name_words).strip()
+            if name_text:
+                result["Full Name"] = reformat_last_first_name(name_text)
+            else:
+                notes.append("Layout A: no name text found before the 'DOB:' label on its line")
             break
 
     if header_idx is None:
         notes.append("Layout A: 'DOB'/'Student ID' header line not found")
-    else:
-        if header_idx > 0:
-            name_line = lines[header_idx - 1]
-            name_text = " ".join(t for _, _, t in name_line).strip()
-            if name_text:
-                result["Full Name"] = name_text
-            else:
-                notes.append("Layout A: name line above the DOB/Student ID line is blank")
-        else:
-            notes.append("Layout A: DOB/Student ID line is the first line on the page -- no name line above it")
-        if not result["Student ID"]:
-            notes.append("Layout A: 'Student ID' caption found but value blank")
+    elif not result["Student ID"]:
+        notes.append("Layout A: 'Student ID' caption found but value blank")
 
     result["SSN"] = find_ssn_shape(lines)
     if not result["SSN"]:
@@ -380,6 +393,19 @@ def debug_page(path: Path, page_num: int):
     lines = group_words_into_lines(words)
     kind = classify_page(lines)
     print(f"page classified as: {kind or 'UNRECOGNIZED (neither Layout A nor Layout B markers found)'}")
+    if kind == "A":
+        rec, notes = parse_layout_a(lines)
+        print(f"  parsed Student ID: {'(found)' if rec['Student ID'] else '(blank)'}")
+        print(f"  parsed SSN (shape-based): {'(found)' if rec['SSN'] else '(NOT found)'}")
+        print(f"  parsed Full Name: {'(found)' if rec['Full Name'] else '(blank)'}")
+        if notes:
+            print(f"  notes: {'; '.join(notes)}")
+    elif kind == "B":
+        rec, notes = parse_layout_b(lines)
+        for k in ["Name", "Address", "ID Number", "SSN", "Birth Date", "Birth Name"]:
+            print(f"  parsed {k}: {'(found)' if rec.get(k) else '(blank)'}")
+        if notes:
+            print(f"  notes: {'; '.join(notes)}")
     print(f"lines detected: {len(lines)}")
     for i, line in enumerate(lines):
         print(f"  [{i:>3}] {mask_line_except_labels(line)}")

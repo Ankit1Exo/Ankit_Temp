@@ -21,12 +21,14 @@ def put1(x, y, text, sz=size):
 
 
 put1(30, 30, "XGRA    mclambm")
-put1(30, 55, "Jamie Michael Testerson")  # full middle name -- this is what should win
-put1(30, 80, "DOB: 14 Dec 1995    Student ID: 1138266    Print Date: 15 Jul 2022")
-put1(30, 105, "TRANSFER CREDITS      Hours Attempted   0.0      Hours Passed   0.0")
-put1(30, 125, "555-12-4567")  # SSN, uncaptioned, shape-based match target
-put1(30, 150, "20FAD12 2020 Fall D01, DO-2, PA AY: 2020      ATT   CPT   PTS")
-put1(40, 170, "MPAP 504  MCO1  CLINICAL MEDICINE I     C   3.0  3.0  6.0")
+# Name prints as "Lastname, Firstname Middle" INLINE with the DOB/Student ID/
+# Print Date line (confirmed against a real file's masked debug output) --
+# full middle name here, vs. the middle-initial-only version on Layout B.
+put1(30, 55, "Testerson, Jamie Michael DOB: 14 Dec 1995    Student ID: 1138266    Print Date: 15 Jul 2022")
+put1(30, 80, "TRANSFER CREDITS      Hours Attempted   0.0      Hours Passed   0.0")
+put1(30, 100, "555-12-4567")  # SSN, uncaptioned, shape-based match target
+put1(30, 125, "20FAD12 2020 Fall D01, DO-2, PA AY: 2020      ATT   CPT   PTS")
+put1(40, 145, "MPAP 504  MCO1  CLINICAL MEDICINE I     C   3.0  3.0  6.0")
 
 # ---- Page 2: Layout B (Etran Omed Only) ----
 p2 = doc.new_page(width=800, height=500)
