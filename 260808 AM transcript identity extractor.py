@@ -1,36 +1,28 @@
 """
 Academic Transcript Identity Extractor -- Tkinter GUI
 ========================================================
-Extracts Name, Address, ID Number, SSN, Birth Date, and Birth Name from
-PDFs that contain TWO different transcript layouts as different pages of
-the same file:
+Extracts identity fields from PDFs that contain TWO different transcript
+layouts as different pages of the same file. The two layouts are NOT
+cross-matched against each other -- each is extracted independently into
+its own set of columns, one output row per page:
 
   Layout A ("summary"): a dotted-rule course listing with a "DOB:" /
-  "Student ID:" / "Print Date:" header line. The line immediately above
-  that header line is this layout's (uncaptioned) full name -- with the
-  FULL middle name, not just an initial. This layout doesn't caption an
-  SSN, so one is located by shape (a token matching XXX-XX-XXXX or 9 bare
-  digits, or three adjacent 3/2/4-digit tokens) if present anywhere on
-  the page.
+  "Student ID:" / "Print Date:" header line. The name is printed on that
+  SAME line, before the "DOB:" caption (e.g. "Lastname, Firstname
+  Middle DOB: ... Student ID: ... Print Date: ..."). ONLY the name is
+  extracted from this layout, exactly as printed -- no reordering, no
+  other fields -- into the "Name (Summary Page)" column.
 
   Layout B ("Etran Omed Only"): "Mr./Ms./Mrs./Dr. <Name>" followed by a
   2-3 line address (street, optional "Apt ..." line, then city/state/
   zip), with "ID Number:", "SSN:", "Birth Date:", and "Birth Name:"
-  printed alongside those same rows in a column to the right.
-
-Layout B supplies Address, ID Number, SSN, Birth Date, and Birth Name.
-For Name, a Layout A page in the SAME PDF is looked up by matching SSN
-(falling back to Student ID / ID Number if SSN isn't available on the
-Layout A page) and its full-middle-name version is used; if no match is
-found, the Layout B page's own name (which may be middle-initial-only)
-is kept instead, and "Extraction Notes" records which happened.
+  printed alongside those same rows in a column to the right. Name,
+  Address, ID Number, SSN, Birth Date, and Birth Name are all extracted
+  from this layout into their own columns (plus Street/Apt-Suite/City/
+  State/Zip and First/Middle/Last splits of this layout's own name).
 
 The course table itself is NOT extracted by this script (identity fields
 only, per what was asked for).
-
-One output row is written per Layout B page (Layout A pages with no
-matching Layout B page in the same file produce no row, since they don't
-carry Address/ID Number/Birth Date/Birth Name).
 
 GUI:
     - Source folder picker (scanned recursively for PDFs)
@@ -71,7 +63,6 @@ OUTPUT_XLSX_NAME = "transcript_identity_extracted.xlsx"
 
 HONORIFIC_RE = re.compile(r"^(Mr|Mrs|Ms|Miss|Dr)\.?\s*", re.IGNORECASE)
 CITY_STATE_ZIP_RE = re.compile(r"^(?P<city>.+?),?\s*(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)\b")
-SSN_TOKEN_FULL_RE = re.compile(r"^\d{3}-\d{2}-\d{4}$|^\d{9}$")
 APT_LINE_RE = re.compile(r"^(apt|suite|unit|ste)\b", re.IGNORECASE)
 
 IDENTITY_LABELS_B = {
@@ -84,8 +75,8 @@ ALL_LABEL_STRINGS_B = [" ".join(v) for variants in IDENTITY_LABELS_B.values() fo
 
 OUTPUT_COLUMNS = [
     "File Name", "Page Number",
-    "Name (As Printed)", "Name (Full Middle Name)",
-    "First Name", "Middle Name", "Last Name",
+    "Name (Summary Page)",
+    "Name (As Printed)", "First Name", "Middle Name", "Last Name",
     "Address", "Street", "Apt/Suite", "City", "State", "Zip",
     "ID Number", "SSN", "Birth Date", "Birth Name", "Extraction Notes",
 ]
@@ -155,37 +146,6 @@ def left_of_first_label(line, label_strings):
     return line[:first_start]
 
 
-def find_ssn_shape(lines):
-    """Layout A doesn't caption its SSN -- find one by shape: a single
-    token matching XXX-XX-XXXX or 9 bare digits, or three adjacent tokens
-    shaped 3/2/4 digits."""
-    for line in lines:
-        tokens = [t.strip() for _, _, t in line]
-        for t in tokens:
-            if SSN_TOKEN_FULL_RE.match(t):
-                digits = re.sub(r"\D", "", t)
-                return f"{digits[0:3]}-{digits[3:5]}-{digits[5:9]}"
-        for i in range(len(tokens) - 2):
-            a, b, c = tokens[i], tokens[i + 1], tokens[i + 2]
-            if re.fullmatch(r"\d{3}", a) and re.fullmatch(r"\d{2}", b) and re.fullmatch(r"\d{4}", c):
-                return f"{a}-{b}-{c}"
-    return ""
-
-
-def normalize_ssn_digits(s):
-    return re.sub(r"\D", "", s or "")
-
-
-def reformat_last_first_name(name_text):
-    """"Lastname, Firstname Middle" -> "Firstname Middle Lastname". Only
-    reorders when a comma is actually present, so it's a no-op on names
-    that already print in the other order."""
-    if "," not in name_text:
-        return name_text
-    last, _, rest = name_text.partition(",")
-    return f"{rest.strip()} {last.strip()}".strip()
-
-
 def split_name_parts(name_text):
     """Best-effort "First [Middle...] Last" split. 1 token -> First only;
     2 tokens -> First/Last, Middle blank; 3+ tokens -> first token is
@@ -239,42 +199,29 @@ def classify_page(lines):
 
 
 # ===========================================================================
-# LAYOUT A ("summary") -- full name (with full middle name) + SSN/Student ID
+# LAYOUT A ("summary") -- name ONLY, exactly as printed
 # ===========================================================================
 def parse_layout_a(lines):
     """The name on this layout is printed as "Lastname, Firstname Middle"
     on the SAME line as the DOB/Student ID/Print Date captions (confirmed
-    against a real file's masked debug output) -- not on a separate line
-    above it. Reformatted here to "Firstname Middle Lastname" to match
-    typical name-column conventions; if that's not wanted, the raw
-    "Lastname, Firstname Middle" form is easy to keep instead."""
-    result = {"Student ID": "", "SSN": "", "Full Name": ""}
+    against a real file's masked debug output), before the "DOB:" label
+    starts. Kept exactly as printed -- no reordering, no other fields
+    extracted from this layout."""
+    result = {"Name": ""}
     notes = []
 
-    header_idx = None
-    for idx, line in enumerate(lines):
+    for line in lines:
         text = " ".join(t for _, _, t in line).lower()
         if "dob" in text and "student id" in text:
-            header_idx = idx
-            vals, _ = label_values(line, ["DOB", "Student ID", "Print Date"])
-            result["Student ID"] = " ".join(t for _, _, t in vals.get("Student ID", []))
-
             name_words = left_of_first_label(line, ["DOB", "Student ID", "Print Date"])
             name_text = " ".join(t for _, _, t in name_words).strip()
             if name_text:
-                result["Full Name"] = reformat_last_first_name(name_text)
+                result["Name"] = name_text
             else:
                 notes.append("Layout A: no name text found before the 'DOB:' label on its line")
             break
-
-    if header_idx is None:
+    else:
         notes.append("Layout A: 'DOB'/'Student ID' header line not found")
-    elif not result["Student ID"]:
-        notes.append("Layout A: 'Student ID' caption found but value blank")
-
-    result["SSN"] = find_ssn_shape(lines)
-    if not result["SSN"]:
-        notes.append("Layout A: no SSN-shaped value found on this page")
 
     return result, notes
 
@@ -334,12 +281,13 @@ def parse_layout_b(lines):
 
 
 # ===========================================================================
-# PER-PDF DRIVER (parses every page, then matches A -> B by SSN/Student ID)
+# PER-PDF DRIVER -- one row per page; Layout A and Layout B are extracted
+# independently into their own columns, with no cross-matching between them.
 # ===========================================================================
 def process_pdf(path: Path):
     doc = fitz.open(str(path))
-    layout_a_records = []
-    layout_b_records = []
+    rows = []
+    n_a = n_b = 0
 
     for i, page in enumerate(doc, start=1):
         text = page.get_text()
@@ -348,56 +296,33 @@ def process_pdf(path: Path):
         words = page.get_text("words")
         lines = group_words_into_lines(words)
         kind = classify_page(lines)
+        if kind not in ("A", "B"):
+            continue
+
+        row = {col: "" for col in OUTPUT_COLUMNS if col not in ("File Name", "Page Number", "Extraction Notes")}
+
         if kind == "A":
+            n_a += 1
             rec, notes = parse_layout_a(lines)
-            rec["_page"] = i
-            rec["_notes"] = notes
-            layout_a_records.append(rec)
-        elif kind == "B":
-            rec, notes = parse_layout_b(lines)
-            rec["_page"] = i
-            rec["_notes"] = notes
-            layout_b_records.append(rec)
-    doc.close()
-
-    rows = []
-    for b in layout_b_records:
-        row = {col: b.get(col, "") for col in ["Address", "ID Number", "SSN", "Birth Date", "Birth Name"]}
-        notes = list(b["_notes"])
-
-        as_printed_name = b.get("Name", "")
-        row["Name (As Printed)"] = as_printed_name
-
-        match, match_key = None, None
-        if b.get("SSN"):
-            match = next((a for a in layout_a_records
-                          if a.get("SSN") and normalize_ssn_digits(a["SSN"]) == normalize_ssn_digits(b["SSN"])), None)
-            if match:
-                match_key = "SSN"
-        if match is None and b.get("ID Number"):
-            match = next((a for a in layout_a_records
-                          if a.get("Student ID") and a["Student ID"].strip() == b["ID Number"].strip()), None)
-            if match:
-                match_key = "Student ID"
-
-        full_middle_name = ""
-        if match and match.get("Full Name"):
-            full_middle_name = match["Full Name"]
-            notes.append(f"'Name (Full Middle Name)' taken from Layout A page {match['_page']} (matched by {match_key})")
+            row["Name (Summary Page)"] = rec.get("Name", "")
         else:
-            notes.append("No matching Layout A (summary) record found -- 'Name (Full Middle Name)' left blank")
-        row["Name (Full Middle Name)"] = full_middle_name
-
-        row["First Name"], row["Middle Name"], row["Last Name"] = split_name_parts(full_middle_name or as_printed_name)
-        row["Street"], row["Apt/Suite"], row["City"], row["State"], row["Zip"] = \
-            split_address_parts(b.get("_address_lines", []))
+            n_b += 1
+            rec, notes = parse_layout_b(lines)
+            row["Name (As Printed)"] = rec.get("Name", "")
+            row["Address"] = rec.get("Address", "")
+            row["Street"], row["Apt/Suite"], row["City"], row["State"], row["Zip"] = \
+                split_address_parts(rec.get("_address_lines", []))
+            row["First Name"], row["Middle Name"], row["Last Name"] = split_name_parts(rec.get("Name", ""))
+            for k in ["ID Number", "SSN", "Birth Date", "Birth Name"]:
+                row[k] = rec.get(k, "")
 
         row["File Name"] = path.name
-        row["Page Number"] = b["_page"]
+        row["Page Number"] = i
         row["Extraction Notes"] = "; ".join(notes)
         rows.append(row)
 
-    return rows, len(layout_a_records), len(layout_b_records)
+    doc.close()
+    return rows, n_a, n_b
 
 
 # ===========================================================================
@@ -448,9 +373,7 @@ def debug_page(path: Path, page_num: int):
     print(f"page classified as: {kind or 'UNRECOGNIZED (neither Layout A nor Layout B markers found)'}")
     if kind == "A":
         rec, notes = parse_layout_a(lines)
-        print(f"  parsed Student ID: {'(found)' if rec['Student ID'] else '(blank)'}")
-        print(f"  parsed SSN (shape-based): {'(found)' if rec['SSN'] else '(NOT found)'}")
-        print(f"  parsed Full Name: {'(found)' if rec['Full Name'] else '(blank)'}")
+        print(f"  parsed Name: {'(found)' if rec['Name'] else '(blank)'}")
         if notes:
             print(f"  notes: {'; '.join(notes)}")
     elif kind == "B":
