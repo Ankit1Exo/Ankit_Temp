@@ -172,6 +172,24 @@ OUTPUT_COLUMNS = [
 ]
 
 
+# Report generators do not reliably use the ASCII hyphen. A PDF produced
+# from a mainframe print stream may carry U+2010 HYPHEN, U+2013 EN DASH or
+# U+2212 MINUS in the SSN and in the row of dashes -- all of which look
+# identical on screen and none of which match a regex written with "-".
+# Every dash-like and space-like character is folded to its ASCII form
+# before anything is matched.
+CHARACTER_FOLD = {
+    **dict.fromkeys(map(ord, "‐‑‒–—―−⁃"
+                             "﹘﹣－­"), "-"),
+    **dict.fromkeys(map(ord, "     　"), " "),
+}
+
+
+def fold(text):
+    """ASCII-fold the dash and space characters a report may use."""
+    return text.translate(CHARACTER_FOLD)
+
+
 # ===========================================================================
 # 1. REBUILDING PRINTED LINES FROM WORD POSITIONS
 # ===========================================================================
@@ -193,7 +211,7 @@ def page_lines(page):
     median_height = heights[len(heights) // 2] or 1.0
     tolerance = median_height * LINE_TOLERANCE_RATIO
 
-    items = sorted(((w[1] + w[3]) / 2.0, w[0], w[2], w[4]) for w in words)
+    items = sorted(((w[1] + w[3]) / 2.0, w[0], w[2], fold(w[4])) for w in words)
 
     lines, current, anchor = [], [], None
     for centre, x0, x1, text in items:
@@ -390,15 +408,20 @@ def split_name(name, notes):
 
 
 def parse_student_line(line, columns):
-    """One student row from a rebuilt line, or None if the line is not a
-    student line."""
+    """Parse one rebuilt line. Returns (row, reject_reason): exactly one of
+    the two is set. A reject_reason is given even for lines that were never
+    going to be students, so a run can account for every SSN it saw rather
+    than dropping lines silently -- that silence is what made earlier
+    versions impossible to debug from the outside."""
     text = line_text(line)
-    if is_not_student_line(text):
-        return None
 
     located = locate_ssn(line)
     if located is None:
-        return None
+        return None, None                       # not a student line at all
+
+    if is_not_student_line(text):
+        return None, "line is a course row or the '#Excluded' row"
+
     ssn_index, before, ssn_text, after = located
 
     notes = []
@@ -433,7 +456,9 @@ def parse_student_line(line, columns):
     # person. Reject the row rather than emit a blank name beside a real
     # SSN.
     if not full_name:
-        return None
+        if not tokens:
+            return None, "nothing at all printed to the right of the SSN"
+        return None, f"everything right of the SSN was report text (cut at {reason})"
 
     row["Name Boundary"] = reason
     row["Prefix"] = prefix
@@ -451,7 +476,7 @@ def parse_student_line(line, columns):
 
     row["First Name"], row["Middle"], row["Last Name"] = split_name(full_name, notes)
     row["Extraction Notes"] = "; ".join(notes)
-    return row
+    return row, None
 
 
 # ===========================================================================
@@ -496,42 +521,62 @@ def dedupe_rows(rows):
     return merged
 
 
+class PageResult:
+    """What one page produced, including why anything was rejected."""
+
+    def __init__(self):
+        self.rows = []
+        self.rejects = []        # (reason, masked example line)
+        self.heading = False
+        self.separator = False
+        self.line_count = 0
+
+
 def read_page(page, file_name, page_num):
-    """Returns (rows, heading_found, separator_found, line_count)."""
     lines = page_lines(page)
+    result = PageResult()
+    result.line_count = len(lines)
     columns = find_heading_columns(lines)
-    separator_found = any(is_separator(ln) for ln in lines)
+    result.heading = columns is not None
+    result.separator = any(is_separator(ln) for ln in lines)
 
-    rows = []
-    for line in data_region(lines):
+    # Every line is examined, not just those after the dashes. The dashes
+    # tell a reader where the data starts, but using them as a FILTER means
+    # a page whose separator is missing, wrapped oddly, or drawn as a
+    # graphic rather than text loses all of its students. Requiring an SSN
+    # and a real name already identifies student lines precisely, so the
+    # separator is reported and never enforced.
+    for line in lines:
         try:
-            row = parse_student_line(line, columns)
+            row, reject = parse_student_line(line, columns)
         except Exception as e:
-            row = {col: "" for col in OUTPUT_COLUMNS}
-            row["Extraction Notes"] = f"ERROR: {type(e).__name__}: {e}"
-        if row is None:
-            continue
-        row["File Name"], row["Page Number"] = file_name, page_num
-        rows.append(row)
+            row, reject = None, f"ERROR: {type(e).__name__}: {e}"
+        if row is not None:
+            row["File Name"], row["Page Number"] = file_name, page_num
+            result.rows.append(row)
+        elif reject:
+            result.rejects.append((reject, mask_text_except_labels(line_text(line))[:150]))
 
-    return dedupe_rows(rows), columns is not None, separator_found, len(lines)
+    result.rows = dedupe_rows(result.rows)
+    return result
 
 
 def process_pdf(path: Path):
     doc = fitz.open(str(path))
-    rows, image_only_pages, no_heading = [], [], 0
+    rows, image_only_pages, no_heading, rejects = [], [], 0, []
 
     for page_num, page in enumerate(doc, start=1):
         if len(page.get_text().strip()) < MIN_TEXT_CHARS_PER_PAGE:
             image_only_pages.append(page_num)
             continue
-        page_rows, heading, _, _ = read_page(page, path.name, page_num)
-        if not heading:
+        result = read_page(page, path.name, page_num)
+        if not result.heading:
             no_heading += 1
-        rows.extend(page_rows)
+        rows.extend(result.rows)
+        rejects.extend(result.rejects)
 
     doc.close()
-    return rows, image_only_pages, no_heading
+    return rows, image_only_pages, no_heading, rejects
 
 
 # ===========================================================================
@@ -588,15 +633,17 @@ def debug_page(path: Path, page_num: int):
              if columns and columns["name_end"] else ""))
     print(f"dashes separator: {'line ' + str(separator_at) if separator_at is not None else 'NOT FOUND'}")
 
-    rows, _, _, _ = read_page(page, path.name, page_num)
-    print(f"students found: {len(rows)}")
-    for row in rows:
+    result = read_page(page, path.name, page_num)
+    print(f"students found: {len(result.rows)}")
+    for row in result.rows:
         print(f"  ID {'(found)' if row['ID'] else '(blank)'} | "
               f"SSN {'(found)' if row['SSN'] else '(blank)'} | "
               f"name {'(found)' if row['Full Name'] else '(blank)'} | "
               f"boundary: {row['Name Boundary']}")
         if row["Extraction Notes"]:
             print(f"    notes: {row['Extraction Notes']}")
+    for reason, example in result.rejects:
+        print(f"  rejected: {reason}\n      {example}")
 
     print(f"lines rebuilt: {len(lines)}")
     for i, line in enumerate(lines):
@@ -627,21 +674,24 @@ def diagnose(target: Path):
                       f"scanned image with no text layer and must be OCR'd first.")
                 continue
 
-            rows, heading, separator, line_count = read_page(page, path.name, page_num)
-            total += len(rows)
-            print(f"  page {page_num}: {len(rows)} student(s)  "
-                  f"[{chars} chars, {line_count} lines rebuilt, "
-                  f"heading {'YES' if heading else 'no'}, dashes {'YES' if separator else 'no'}]")
+            result = read_page(page, path.name, page_num)
+            total += len(result.rows)
+            print(f"  page {page_num}: {len(result.rows)} student(s)  "
+                  f"[{chars} chars, {result.line_count} lines rebuilt, "
+                  f"heading {'YES' if result.heading else 'no'}, "
+                  f"dashes {'YES' if result.separator else 'no'}]")
 
-            if not rows:
-                lines = data_region(page_lines(page))
-                near = [ln for ln in lines
-                        if locate_ssn(ln) or HONORIFIC_RE.match(line_text(ln))]
+            for reason, example in result.rejects[:5]:
+                print(f"      rejected ({reason}):\n         {example}")
+
+            if not result.rows and not result.rejects:
+                near = [ln for ln in page_lines(page) if HONORIFIC_RE.match(line_text(ln))]
                 if not near:
-                    print("      no line after the dashes holds an SSN-shaped value or a "
-                          "Mr./Mrs./Ms./Dr. prefix -- there is nothing here to extract")
+                    print("      no line on this page holds an SSN-shaped value at all -- check "
+                          "whether the SSN is printed with an unusual dash, or is absent")
                 for line in near[:5]:
-                    print(f"      near-miss: {mask_text_except_labels(line_text(line))[:150]}")
+                    print(f"      has a name prefix but no SSN: "
+                          f"{mask_text_except_labels(line_text(line))[:150]}")
 
         print(f"  TOTAL: {total} student(s) in this file\n")
         doc.close()
@@ -650,6 +700,25 @@ def diagnose(target: Path):
 # ===========================================================================
 # 7. EXTRACTION RUNNER
 # ===========================================================================
+def report_rejects(rejects):
+    """Account for every line that held an SSN but did not become a row.
+
+    Printed on every run, not just on request: a run that quietly produces
+    ten rows from a hundred-student report looks like a success, and the
+    only way to tell it isn't is to see what was thrown away. Examples are
+    masked to #/X shapes, so this is safe to copy out of the console."""
+    if not rejects:
+        return
+    grouped = {}
+    for reason, example in rejects:
+        grouped.setdefault(reason, []).append(example)
+
+    print(f"\n{len(rejects)} line(s) held an SSN but did not become a row:")
+    for reason, examples in sorted(grouped.items(), key=lambda kv: -len(kv[1])):
+        print(f"  {len(examples):>5}  {reason}")
+        print(f"         e.g. {examples[0]}")
+    print("  (values above are masked: # = a digit, X = a letter. If a real student line is "
+          "in this list, send it to whoever maintains this script.)")
 def run_extraction(source_folder, dest_folder, status_callback):
     src, dst = Path(source_folder), Path(dest_folder)
     if not src.is_dir():
@@ -673,20 +742,23 @@ def run_extraction(source_folder, dest_folder, status_callback):
     print(f"Found {len(pdfs)} PDF file(s).")
 
     all_rows, no_students, image_only, headingless = [], [], [], 0
+    all_rejects = []
     with tqdm(pdfs, desc="Extracting", unit="pdf", ncols=100) as pbar:
         for pdf_path in pbar:
             pbar.set_postfix_str(pdf_path.name)
-            rows, image_pages, no_heading = process_pdf(pdf_path)
+            rows, image_pages, no_heading, rejects = process_pdf(pdf_path)
             if not rows:
                 no_students.append(pdf_path.name)
             if image_pages:
                 image_only.append(f"{pdf_path.name} (page(s) {', '.join(map(str, image_pages))})")
             headingless += no_heading
             all_rows.extend(rows)
+            all_rejects.extend(rejects)
             status_callback(f"Processed {pdf_path.name} ({len(all_rows)} student(s) so far)")
 
     if not all_rows:
         print("No student lines found in any file -- nothing to write.")
+        report_rejects(all_rejects)
         status_callback("Done. No student lines found -- nothing written.")
         return False
 
@@ -712,6 +784,7 @@ def run_extraction(source_folder, dest_folder, status_callback):
 
     if flagged:
         print(f"{flagged} row(s) have a non-empty 'Extraction Notes' -- spot-check those.")
+    report_rejects(all_rejects)
     if headingless:
         print(f"{headingless} page(s) had no 'ID SSN Name' heading line, so the Name column's "
               f"right edge was unknown and caption rules were used instead.")
