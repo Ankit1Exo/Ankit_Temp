@@ -160,6 +160,18 @@ KNOWN_TRAILING_CAPTIONS = [
 
 PREFERRED_BOUNDARY = "academic program"
 
+# Words that belong to the report's own furniture, never to a student's
+# name. A name is cut at the first of these. This is what stops an
+# interleaved reading -- where column text from another line lands beside
+# the SSN -- from being written out as a name like "Credits Remedial".
+# Deliberately excludes words that are also real surnames (Page, Grade,
+# Young, ...), so it can only ever cut report text, not a person.
+REPORT_STOP_WORDS = {
+    "credits", "credit", "remedial", "excluded", "gpa", "cmpl", "pgm", "incl", "eval",
+    "grd", "cum", "att", "earn", "ssn", "dhdhs", "cred", "attempted", "sciences",
+    "term/dt", "transfer", "satisfactory", "audit", "batch", "verified", "skipped",
+}
+
 OUTPUT_COLUMNS = [
     "File Name", "Page Number",
     "ID", "SSN",
@@ -203,29 +215,23 @@ def normalise(text):
     return " ".join(text.split()).lower()
 
 
-def page_text_lines(page):
-    """Every text line on the page, from two independent extraction paths,
-    de-duplicated.
+def lines_by_word_position(page):
+    """Primary path: words grouped by geometry. Reconstructs each printed
+    line as it actually appears, which is what keeps a student's ID, SSN
+    and name together."""
+    return [line_text(ln) for ln in group_words_into_lines(page.get_text("words"))]
 
-    The two paths fail differently: word-grouping copes with jitter and
-    multi-column layouts but depends on the word geometry being sane,
-    while PyMuPDF's own text layer preserves the original line breaks but
-    can interleave columns. Running both and merging means a page has to
-    defeat BOTH before a student is lost. De-duplication is on whitespace-
-    normalised text, so a line seen by both paths yields one row, not
-    two."""
-    seen, out = set(), []
-    for source in (
-        (line_text(ln) for ln in group_words_into_lines(page.get_text("words"))),
-        page.get_text("text").splitlines(),
-    ):
-        for raw in source:
-            text = raw.strip()
-            key = normalise(text)
-            if key and key not in seen:
-                seen.add(key)
-                out.append(text)
-    return out
+
+def lines_by_text_layer(page):
+    """Fallback path: PyMuPDF's own line breaks.
+
+    Used ONLY when the primary path finds nothing on a page. It is not
+    merged with the primary path, because on a wide columnar report like
+    this one it interleaves text from different columns -- which produced
+    rows carrying a student's first name in the ID column and the report's
+    own words ("Credits Remedial") as the name. It stays as a fallback
+    because it can still rescue a page whose word geometry is unusable."""
+    return [t.strip() for t in page.get_text("text").splitlines() if t.strip()]
 
 
 def line_text(line):
@@ -261,6 +267,11 @@ def find_name_stop(tokens):
                 if token == fused:
                     offer(i, label)
                     break
+
+    for i, token in enumerate(tokens):
+        if token.strip(":.,#").lower() in REPORT_STOP_WORDS:
+            offer(i, f"report text ('{token}')")
+            break
 
     for i, token in enumerate(tokens):
         if re.search(r"\d", token) or token.startswith("("):
@@ -378,12 +389,25 @@ def parse_student_line(text):
 
     name_tokens = name_text.split()
     stop, reason = find_name_stop(name_tokens)
+
+    prefix, full_name = strip_prefix(" ".join(name_tokens[:stop]))
+
+    # Nothing survived the cut, so whatever followed the SSN was report
+    # text, not a person -- an interleaved reading such as
+    # "... 555-11-1427 Credits Remedial ...". Reject the whole row: an
+    # earlier version emitted these with a blank name and the student's
+    # first name sitting in the ID column.
+    if not full_name:
+        return None
+
     row["Name Boundary"] = reason
     if reason.startswith("a token containing") or reason.startswith("an unrecognised caption"):
         notes.append(f"name ended at {reason} rather than the 'Academic Program' caption -- "
                      "verify the name is complete and has nothing extra")
+    if reason.startswith("report text"):
+        notes.append(f"name was cut at {reason} -- the extracted line mixed in text from another "
+                     "column; verify the name against the PDF")
 
-    prefix, full_name = strip_prefix(" ".join(name_tokens[:stop]))
     row["Prefix"] = prefix
     row["Full Name"] = full_name
     row["First Name"], row["Middle"], row["Last Name"] = split_name(full_name, notes)
@@ -400,8 +424,10 @@ KNOWN_CAPTION_LABELS = {" ".join(c) for c in KNOWN_TRAILING_CAPTIONS}
 
 def row_score(row):
     """How much to trust a row, for picking between two readings of the
-    same student. A name that ended on a real caption beats one that ran
-    to the end of the line, which in turn beats one cut short at a digit."""
+    same student. A numeric ID matters most: an interleaved reading tends
+    to leave a word (part of the name, or report text) where the ID should
+    be, so "1237906" beating "Birtukhan" is the single strongest signal
+    that a row was assembled correctly."""
     boundary = row["Name Boundary"]
     if boundary == PREFERRED_BOUNDARY:
         rank = 3
@@ -412,7 +438,9 @@ def row_score(row):
     else:
         rank = 0
     note_count = len([n for n in row["Extraction Notes"].split("; ") if n])
-    return (1 if row["Full Name"] else 0, rank, -note_count, len(row["Full Name"]))
+    return (1 if row["ID"].isdigit() else 0,
+            1 if row["Full Name"] else 0,
+            rank, -note_count, len(row["Full Name"]))
 
 
 def candidate_name(text):
@@ -449,12 +477,19 @@ def dedupe_rows(rows):
     same student -- de-duplicating on the text would miss them, so this
     keys on the student instead.
 
-    Where the two readings disagree on the NAME, the better-scoring one is
+    Where the readings disagree on the NAME, the better-scoring one is
     kept and the disagreement is recorded, because that is exactly the
-    case a human should look at."""
+    case a human should look at.
+
+    The key is file + page + SSN, deliberately NOT including the ID. A
+    badly assembled row tends to carry the WRONG ID -- a fragment of the
+    name, or a report word -- so keying on the ID would let the good and
+    the bad reading of one student sit side by side in the output as two
+    rows with the same SSN, which is precisely the duplicate that showed
+    up in the workbook."""
     groups, order = {}, []
     for row in rows:
-        key = (row["File Name"], row["Page Number"], row["ID"], row["SSN"])
+        key = (row["File Name"], row["Page Number"], row["SSN"])
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -464,11 +499,13 @@ def dedupe_rows(rows):
     for key in order:
         variants = groups[key]
         best = max(variants, key=row_score)
-        readings = {v["Full Name"] for v in variants}
+        readings = {(v["ID"], v["Full Name"]) for v in variants}
         if len(readings) > 1:
             best = dict(best)
-            note = ("the two text-extraction paths read this name differently "
-                    f"({' | '.join(sorted(readings))}) -- verify against the PDF")
+            others = sorted(f"{i or '(no ID)'} / {n or '(no name)'}"
+                            for i, n in readings if (i, n) != (best["ID"], best["Full Name"]))
+            note = (f"this SSN was read more than one way; kept the best-scoring reading and "
+                    f"discarded: {'; '.join(others)}")
             best["Extraction Notes"] = "; ".join(x for x in [best["Extraction Notes"], note] if x)
         merged.append(best)
     return merged
@@ -486,27 +523,39 @@ def process_pdf(path: Path):
             image_only_pages.append(page_num)
             continue
 
-        page_rows, candidates = [], []
-        for text in page_text_lines(page):
-            if find_ssn(text) is None:
-                # Detection keys on the SSN, so a student whose SSN is
-                # blank on the report cannot be picked up. Hold on to the
-                # lines that look like students anyway, so that gap can be
-                # reported rather than passing silently.
-                if "academic program" in text.lower() or HONORIFIC_RE.match(text):
-                    candidates.append(text)
-                continue
-            try:
-                row = parse_student_line(text)
-            except Exception as e:
-                row = {col: "" for col in OUTPUT_COLUMNS}
-                row["Extraction Notes"] = f"ERROR: {type(e).__name__}: {e}"
-            if row is None:
-                nameless += 1
-                continue
-            row["File Name"] = path.name
-            row["Page Number"] = page_num
-            page_rows.append(row)
+        def read(lines):
+            """Parse one extraction path's lines into rows, counting the
+            SSN-bearing lines that had no usable name."""
+            found, skipped, maybe = [], 0, []
+            for text in lines:
+                if find_ssn(text) is None:
+                    # Detection keys on the SSN, so a student whose SSN is
+                    # blank on the report cannot be picked up. Hold on to
+                    # the lines that look like students anyway, so that
+                    # gap can be reported rather than passing silently.
+                    if "academic program" in text.lower() or HONORIFIC_RE.match(text):
+                        maybe.append(text)
+                    continue
+                try:
+                    row = parse_student_line(text)
+                except Exception as e:
+                    row = {col: "" for col in OUTPUT_COLUMNS}
+                    row["Extraction Notes"] = f"ERROR: {type(e).__name__}: {e}"
+                if row is None:
+                    skipped += 1
+                    continue
+                row["File Name"] = path.name
+                row["Page Number"] = page_num
+                found.append(row)
+            return found, skipped, maybe
+
+        # Word position first. Only if that finds nothing on this page is
+        # the text layer consulted -- merging the two produced interleaved
+        # rows on this report's wide columnar layout.
+        page_rows, skipped, candidates = read(lines_by_word_position(page))
+        if not page_rows:
+            page_rows, skipped, candidates = read(lines_by_text_layer(page))
+        nameless += skipped
 
         # Most candidates are just the other extraction path's view of a
         # student already captured above -- the same line broken at a
@@ -567,9 +616,13 @@ def debug_page(path: Path, page_num: int):
     print(f"text layer: {len(text.strip())} chars "
           f"({'OK' if len(text.strip()) >= MIN_TEXT_CHARS_PER_PAGE else 'BELOW MIN -- image-only page'})")
 
-    lines = page_text_lines(page)
+    lines = lines_by_word_position(page)
     students = [(i, parse_student_line(t)) for i, t in enumerate(lines)]
     students = [(i, r) for i, r in students if r]
+    if not students:
+        print("word-position path found no students; showing the text-layer fallback instead")
+        lines = lines_by_text_layer(page)
+        students = [(i, r) for i, r in ((i, parse_student_line(t)) for i, t in enumerate(lines)) if r]
     print(f"student lines detected: {len(students)}")
     for i, row in students:
         print(f"  student line [{i}]")
@@ -611,19 +664,21 @@ def diagnose(target: Path):
                       f"be read off it.")
                 continue
 
-            by_words = len(group_words_into_lines(page.get_text("words")))
-            by_text = len(page.get_text("text").splitlines())
-            lines = page_text_lines(page)
-
+            lines = lines_by_word_position(page)
+            path_used = "word-position"
             matched = [r for r in (parse_student_line(t) for t in lines) if r]
+            if not matched:
+                lines = lines_by_text_layer(page)
+                path_used = "text-layer fallback"
+                matched = [r for r in (parse_student_line(t) for t in lines) if r]
+
             for row in matched:
                 row["File Name"], row["Page Number"] = path.name, page_num
             students = dedupe_rows(matched)
             total += len(students)
             print(f"  page {page_num}: {len(students)} student(s) "
                   f"(from {len(matched)} matching line(s) before merge)  "
-                  f"[{chars} chars; {by_words} lines by word-position, {by_text} by text layer, "
-                  f"{len(lines)} merged]")
+                  f"[{chars} chars; {len(lines)} lines via {path_used}]")
 
             if not students:
                 near = [t for t in lines if re.search(r"\d{3}[- ]?\d{2}[- ]?\d{4}", t)
