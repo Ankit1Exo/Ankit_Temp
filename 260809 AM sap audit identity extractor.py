@@ -707,8 +707,11 @@ def run_extraction(source_folder, dest_folder, status_callback):
     if flagged:
         print(f"{flagged} row(s) have a non-empty 'Extraction Notes' -- spot-check those.")
     if total_nameless:
-        print(f"{total_nameless} line(s) held an SSN but no name after it (e.g. a captioned "
-              f"'SSN: ...' field) and were not treated as students.")
+        print(f"{total_nameless} line(s) held an SSN with no name after it and were suppressed. "
+              f"These are normal: the text layer often breaks the student line across the wide "
+              f"gap before the Name column, leaving an 'ID + SSN' fragment. The same student is "
+              f"read in full by the other extraction path, so nothing is lost -- without this "
+              f"they would appear as duplicate rows with a blank name.")
     if total_ssnless:
         print(f"\nWARNING: {total_ssnless} line(s) look like student lines (a name prefix or an "
               f"'Academic Program' caption) but carry NO SSN, so they were not extracted -- "
