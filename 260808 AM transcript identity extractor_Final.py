@@ -1,36 +1,56 @@
 """
 Academic Transcript Identity Extractor -- Tkinter GUI
 ========================================================
-Extracts Name, Address, ID Number, SSN, Birth Date, and Birth Name from
-PDFs that contain TWO different transcript layouts as different pages of
-the same file:
+Extracts identity fields from the "Etran Omed Only" transcript layout ONLY.
 
-  Layout A ("summary"): a dotted-rule course listing with a "DOB:" /
-  "Student ID:" / "Print Date:" header line. The line immediately above
-  that header line is this layout's (uncaptioned) full name -- with the
-  FULL middle name, not just an initial. This layout doesn't caption an
-  SSN, so one is located by shape (a token matching XXX-XX-XXXX or 9 bare
-  digits, or three adjacent 3/2/4-digit tokens) if present anywhere on
-  the page.
+That layout prints, in a left column:
 
-  Layout B ("Etran Omed Only"): "Mr./Ms./Mrs./Dr. <Name>" followed by a
-  2-3 line address (street, optional "Apt ..." line, then city/state/
-  zip), with "ID Number:", "SSN:", "Birth Date:", and "Birth Name:"
-  printed alongside those same rows in a column to the right.
+    Mr. Coby L. Bullard          <- name (honorific optional)
+    1221 Winding Arbor Trail     <- street
+    Apt 12-202                   <- optional Apt/Suite line
+    Raleigh, NC  27606           <- city, state, ZIP
 
-Layout B supplies Address, ID Number, SSN, Birth Date, and Birth Name.
-For Name, a Layout A page in the SAME PDF is looked up by matching SSN
-(falling back to Student ID / ID Number if SSN isn't available on the
-Layout A page) and its full-middle-name version is used; if no match is
-found, the Layout B page's own name (which may be middle-initial-only)
-is kept instead, and "Extraction Notes" records which happened.
+with the captioned identity fields printed in a right-hand column at the
+same page heights:
 
-The course table itself is NOT extracted by this script (identity fields
-only, per what was asked for).
+    ID Number:  ...
+    SSN:        ...
+    Birth Date: ...
+    Birth Name: ...
 
-One output row is written per Layout B page (Layout A pages with no
-matching Layout B page in the same file produce no row, since they don't
-carry Address/ID Number/Birth Date/Birth Name).
+The older "summary" layout (dotted-rule course listing with a
+"DOB:/Student ID:/Print Date:" header) is NO LONGER parsed -- only the
+"Etran Omed Only" pages produce rows.
+
+The course table itself is NOT extracted (identity fields only).
+
+OUTPUT COLUMNS
+    File Name, Page Number,
+    Full Name, FN, MN, LN,
+    Address, Street, Apt/Suite, City, State, ZIP,
+    ID Number, SSN, Birth Date, Birth Name,
+    Extraction Notes
+
+NAME HANDLING
+    - Honorific (Mr./Mrs./Ms./Miss/Dr./Prof./Rev.) is stripped from every
+      name column, including "Full Name". Note the alternation is ordered
+      longest-first and requires whitespace after the prefix, so "Mrs."
+      no longer leaves a stray "s." at the front of the name.
+    - A trailing generational suffix (Jr., Sr., II, III, IV) stays with
+      the Last Name, e.g. LN = "Bullard Jr.".
+    - "Lastname, Firstname Middle" is reordered to "Firstname Middle
+      Lastname" when a comma is present.
+
+ADDRESS HANDLING
+    - The name row is anchored on the "ID Number:" caption (falling back
+      to the honorific, then to the row above "SSN:"), then the left
+      column is walked downward, SKIPPING blank and label-only rows,
+      until the city/state/ZIP row is reached. This is what fixes files
+      where the address came out blank: the old logic stopped at the
+      first blank row and only looked three rows ahead.
+    - 2-line (no Apt/Suite) and 3-line addresses are both supported, and
+      an Apt/Suite printed at the end of the street line
+      ("123 Main St Apt 4") is split out too.
 
 GUI:
     - Source folder picker (scanned recursively for PDFs)
@@ -38,17 +58,18 @@ GUI:
     - Start Extraction button; progress prints to the console window
 
 USAGE:
-    python "260808 AM transcript identity extractor.py"
-    python "260808 AM transcript identity extractor.py" --debug <pdf_or_folder> [page_number]
+    python "260808 AM transcript identity extractor_Final.py"
+    python "260808 AM transcript identity extractor_Final.py" --debug <pdf_or_folder> [page_number]
 
 REQUIREMENTS:
     pip install pymupdf pandas openpyxl tqdm
 
 SECURITY NOTE:
-    These transcripts contain SSNs, birth dates, and home addresses. Run
-    only on an authorized workstation, and store the output only in an
-    approved location -- delete the local copy once it has been loaded
-    into the authorized system of record.
+    These transcripts contain SSNs, birth dates and home addresses. Run
+    only on an authorised workstation, save the output only to the
+    approved Global Insider folder (never the desktop), and delete the
+    local copy once it has been loaded into the authorised system of
+    record. The output workbook is NOT encrypted.
 """
 from __future__ import annotations
 
@@ -69,21 +90,63 @@ from tqdm import tqdm
 MIN_TEXT_CHARS_PER_PAGE = 20
 OUTPUT_XLSX_NAME = "transcript_identity_extracted.xlsx"
 
-HONORIFIC_RE = re.compile(r"^(Mr|Mrs|Ms|Miss|Dr)\.?\s*", re.IGNORECASE)
-CITY_STATE_ZIP_RE = re.compile(r"^(?P<city>.+?),?\s*(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)\b")
+# Longest-first alternation + required trailing whitespace. With the old
+# "^(Mr|Mrs|Ms|...)" ordering, "Mrs. Ann" matched the "Mr" branch and left
+# "s. Ann" behind.
+HONORIFIC_RE = re.compile(r"^(?:Mrs|Miss|Ms|Mr|Dr|Prof|Rev)\.?\s+", re.IGNORECASE)
+
+# Generational suffixes only -- deliberately excludes a bare "V", which is
+# far more often a middle initial than a fifth-generation suffix.
+SUFFIX_TOKENS = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "2nd", "3rd", "4th"}
+
+CITY_STATE_ZIP_RE = re.compile(
+    r"^(?P<city>.+?)\s*,?\s*(?P<state>[A-Za-z]{2})\.?\s+(?P<zip>\d{5}(?:-\d{4})?)\s*$"
+)
+
+# An Apt/Suite printed on its own line.
+APT_LINE_RE = re.compile(
+    r"^(?:apt|apartment|ste|suite|unit|bldg|building|fl|floor|rm|room|lot|trlr|trailer|"
+    r"box|p\.?\s?o\.?\s?box|dept|department|#)\b\.?",
+    re.IGNORECASE,
+)
+
+# An Apt/Suite tacked onto the end of the street line ("123 Main St Apt 4").
+APT_INLINE_RE = re.compile(
+    r"\s+(?P<apt>(?:apt|apartment|ste|suite|unit|bldg|building|fl|floor|rm|room|lot|trlr)\.?\s*"
+    r"[#]?\s*[\w\-/]+|#\s*[\w\-/]+)\s*$",
+    re.IGNORECASE,
+)
+
+# Page furniture / course-table headers that must never be read as address.
+JUNK_LINE_RE = re.compile(
+    r"^(?:page\s+\d+\s+of\s+\d+\b|course\b|title\b|hrs\b|grd\b|etran\b|-{3,}|_{3,}|={3,})",
+    re.IGNORECASE,
+)
+
 SSN_TOKEN_FULL_RE = re.compile(r"^\d{3}-\d{2}-\d{4}$|^\d{9}$")
 
-IDENTITY_LABELS_B = {
-    "ID Number": [["ID Number"]],
-    "SSN": [["SSN"]],
-    "Birth Date": [["Birth Date"]],
-    "Birth Name": [["Birth Name"]],
+IDENTITY_LABELS = {
+    "ID Number": "ID Number",
+    "SSN": "SSN",
+    "Birth Date": "Birth Date",
+    "Birth Name": "Birth Name",
 }
-ALL_LABEL_STRINGS_B = [" ".join(v) for variants in IDENTITY_LABELS_B.values() for v in variants]
+ALL_LABEL_STRINGS = list(IDENTITY_LABELS.values())
+
+# "Birth Name" is routinely blank on this form, so a blank value there is
+# not flagged; a MISSING caption still is.
+FLAG_IF_BLANK = ["ID Number", "SSN", "Birth Date"]
+
+MAX_ADDRESS_SCAN_ROWS = 12      # how far below the name row to look
+MAX_ADDRESS_LINES = 4           # street + optional 2nd street/apt + city line
+MAX_CONSECUTIVE_BLANKS = 3
 
 OUTPUT_COLUMNS = [
-    "File Name", "Page Number", "Name", "Address",
-    "ID Number", "SSN", "Birth Date", "Birth Name", "Extraction Notes",
+    "File Name", "Page Number",
+    "Full Name", "FN", "MN", "LN",
+    "Address", "Street", "Apt/Suite", "City", "State", "ZIP",
+    "ID Number", "SSN", "Birth Date", "Birth Name",
+    "Extraction Notes",
 ]
 
 
@@ -97,6 +160,10 @@ def group_words_into_lines(words, y_tol=3):
         key = round(y0 / y_tol) * y_tol
         lines.setdefault(key, []).append((x0, x1, text))
     return [sorted(v, key=lambda t: t[0]) for _, v in sorted(lines.items())]
+
+
+def line_text(line):
+    return " ".join(t for _, _, t in line).strip()
 
 
 def find_label_spans(line, labels):
@@ -139,11 +206,10 @@ def label_values(line, labels):
     return values, spans
 
 
-def left_of_first_label(line, label_strings):
-    """Everything on the line BEFORE the first of these labels starts --
-    used to strip the right-hand-column identity fields (ID Number/SSN/
-    Birth Date/Birth Name) off a line that also carries left-hand-column
-    Name/Address text at the same page height."""
+def left_of_first_label(line, label_strings=ALL_LABEL_STRINGS):
+    """Everything on the row BEFORE the first right-hand-column caption --
+    i.e. the left (name/address) column of a row that also carries an
+    ID Number / SSN / Birth Date / Birth Name field at the same height."""
     spans = find_label_spans(line, label_strings)
     if not spans:
         return line
@@ -151,25 +217,26 @@ def left_of_first_label(line, label_strings):
     return line[:first_start]
 
 
-def find_ssn_shape(lines):
-    """Layout A doesn't caption its SSN -- find one by shape: a single
-    token matching XXX-XX-XXXX or 9 bare digits, or three adjacent tokens
-    shaped 3/2/4 digits."""
-    for line in lines:
-        tokens = [t.strip() for _, _, t in line]
-        for t in tokens:
-            if SSN_TOKEN_FULL_RE.match(t):
-                digits = re.sub(r"\D", "", t)
-                return f"{digits[0:3]}-{digits[3:5]}-{digits[5:9]}"
-        for i in range(len(tokens) - 2):
-            a, b, c = tokens[i], tokens[i + 1], tokens[i + 2]
-            if re.fullmatch(r"\d{3}", a) and re.fullmatch(r"\d{2}", b) and re.fullmatch(r"\d{4}", c):
-                return f"{a}-{b}-{c}"
-    return ""
+def left_text(line):
+    return line_text(left_of_first_label(line))
 
 
 def normalize_ssn_digits(s):
     return re.sub(r"\D", "", s or "")
+
+
+# ===========================================================================
+# NAME PARSING
+# ===========================================================================
+def strip_honorific(name_text):
+    """Removes a leading Mr./Mrs./Ms./Miss/Dr./Prof./Rev., repeatedly, in
+    case two got printed."""
+    out = name_text.strip()
+    while True:
+        stripped = HONORIFIC_RE.sub("", out).strip()
+        if stripped == out:
+            return out
+        out = stripped
 
 
 def reformat_last_first_name(name_text):
@@ -182,177 +249,274 @@ def reformat_last_first_name(name_text):
     return f"{rest.strip()} {last.strip()}".strip()
 
 
+def clean_name_text(raw):
+    """Raw left-column name cell -> canonical "Firstname Middle Lastname"
+    with no honorific and no trailing punctuation."""
+    txt = re.sub(r"\s+", " ", (raw or "").strip())
+    # Separators only -- NOT ".", which is legitimate in "L." and "Jr.".
+    txt = txt.strip(" ,;:")
+    txt = strip_honorific(txt)
+    txt = reformat_last_first_name(txt)
+    return strip_honorific(txt).strip()  # honorific can precede the comma form
+
+
+def split_name(full_name):
+    """-> (FN, MN, LN). A trailing generational suffix stays with LN."""
+    tokens = [t for t in full_name.split() if t]
+    if not tokens:
+        return "", "", ""
+
+    suffix = ""
+    if len(tokens) >= 3 and tokens[-1].lower().strip(",") in SUFFIX_TOKENS:
+        suffix = tokens.pop().strip(",")
+
+    if len(tokens) == 1:
+        fn, mn, ln = tokens[0], "", ""
+    elif len(tokens) == 2:
+        fn, mn, ln = tokens[0], "", tokens[1]
+    else:
+        fn, mn, ln = tokens[0], " ".join(tokens[1:-1]), tokens[-1]
+
+    if suffix:
+        ln = f"{ln} {suffix}".strip()
+    return fn, mn, ln
+
+
+def looks_like_name(text):
+    """Guards the name anchor against picking up a date stamp, a page
+    header or an address row."""
+    if not text:
+        return False
+    t = text.strip()
+    if JUNK_LINE_RE.match(t):
+        return False
+    if re.match(r"^\d", t):                 # "1221 Winding Arbor Trail", "07/15/22"
+        return False
+    if CITY_STATE_ZIP_RE.match(t):
+        return False
+    return bool(re.search(r"[A-Za-z]{2}", t))
+
+
 # ===========================================================================
-# PAGE CLASSIFICATION
+# ADDRESS PARSING
+# ===========================================================================
+def split_address(addr_lines):
+    """Address rows (top to bottom) -> Street / Apt-Suite / City / State /
+    ZIP, plus a note if the city/state/ZIP row is missing."""
+    parts = {"Street": "", "Apt/Suite": "", "City": "", "State": "", "ZIP": ""}
+    notes = []
+    lines = [re.sub(r"\s+", " ", l.strip()) for l in addr_lines if l and l.strip()]
+    if not lines:
+        return parts, ["Address: no address rows captured"]
+
+    csz_idx = None
+    for i in range(len(lines) - 1, -1, -1):
+        if CITY_STATE_ZIP_RE.match(lines[i]):
+            csz_idx = i
+            break
+
+    if csz_idx is None:
+        notes.append("Address: no city/state/ZIP row found -- City/State/ZIP left blank, "
+                     "check the full Address value")
+        street_lines = lines
+    else:
+        m = CITY_STATE_ZIP_RE.match(lines[csz_idx])
+        parts["City"] = m.group("city").strip(" ,")
+        parts["State"] = m.group("state").upper()
+        parts["ZIP"] = m.group("zip")
+        street_lines = lines[:csz_idx]
+
+    if not street_lines:
+        notes.append("Address: city/state/ZIP found but no street row above it")
+        return parts, notes
+
+    apt_lines = [l for l in street_lines if APT_LINE_RE.match(l)]
+    street_only = [l for l in street_lines if not APT_LINE_RE.match(l)]
+
+    # A PO Box on its own is the street, not an Apt/Suite.
+    if not street_only and apt_lines:
+        street_only, apt_lines = apt_lines[:1], apt_lines[1:]
+
+    street = " ".join(street_only).strip()
+    apt = " ".join(apt_lines).strip()
+
+    if not apt:
+        m = APT_INLINE_RE.search(street)
+        if m:
+            apt = m.group("apt").strip()
+            street = street[:m.start()].strip()
+
+    parts["Street"] = street
+    parts["Apt/Suite"] = apt
+    return parts, notes
+
+
+def collect_address_lines(lines, name_idx):
+    """Walks the left column downward from the name row, SKIPPING blank and
+    label-only rows, until the city/state/ZIP row (or the scan limits) are
+    reached. The old version stopped at the first blank row within three
+    rows of the name -- which is why some files came out with a blank
+    Address."""
+    addr, blanks = [], 0
+    end = min(name_idx + 1 + MAX_ADDRESS_SCAN_ROWS, len(lines))
+    for idx in range(name_idx + 1, end):
+        text = left_text(lines[idx])
+        if not text:
+            blanks += 1
+            if blanks >= MAX_CONSECUTIVE_BLANKS and addr:
+                break
+            continue
+        if JUNK_LINE_RE.match(text):
+            break
+        blanks = 0
+        addr.append(text)
+        if CITY_STATE_ZIP_RE.match(text):
+            break
+        if len(addr) >= MAX_ADDRESS_LINES:
+            break
+    return addr
+
+
+# ===========================================================================
+# PAGE CLASSIFICATION -- "Etran Omed Only" layout only
 # ===========================================================================
 def classify_page(lines):
-    text_lower = " ".join(t for line in lines for _, _, t in line).lower()
-    if "id number" in text_lower and "ssn" in text_lower:
+    text_lower = " ".join(line_text(l) for l in lines).lower()
+    if "etran omed only" in text_lower:
         return "B"
-    if "student id" in text_lower and ("dob" in text_lower or "transfer credits" in text_lower):
-        return "A"
-    return None
+    hits = sum(1 for lbl in ("id number", "ssn", "birth date", "birth name")
+               if lbl in text_lower)
+    return "B" if hits >= 2 else None
 
 
 # ===========================================================================
-# LAYOUT A ("summary") -- full name (with full middle name) + SSN/Student ID
+# PAGE PARSING
 # ===========================================================================
-def parse_layout_a(lines):
-    """The name on this layout is printed as "Lastname, Firstname Middle"
-    on the SAME line as the DOB/Student ID/Print Date captions (confirmed
-    against a real file's masked debug output) -- not on a separate line
-    above it. Reformatted here to "Firstname Middle Lastname" to match
-    typical name-column conventions; if that's not wanted, the raw
-    "Lastname, Firstname Middle" form is easy to keep instead."""
-    result = {"Student ID": "", "SSN": "", "Full Name": ""}
-    notes = []
-
-    header_idx = None
+def find_name_row(lines):
+    """Anchors the name row, most reliable signal first:
+       1. the row carrying the "ID Number:" caption (the name prints to its
+          left on this layout),
+       2. any row starting with an honorific,
+       3. the row directly above the "SSN:" caption.
+    Returns (index, raw_left_text) or (None, "")."""
+    id_idx = ssn_idx = None
     for idx, line in enumerate(lines):
-        text = " ".join(t for _, _, t in line).lower()
-        if "dob" in text and "student id" in text:
-            header_idx = idx
-            vals, _ = label_values(line, ["DOB", "Student ID", "Print Date"])
-            result["Student ID"] = " ".join(t for _, _, t in vals.get("Student ID", []))
+        if id_idx is None and find_label_spans(line, ["ID Number"]):
+            id_idx = idx
+        if ssn_idx is None and find_label_spans(line, ["SSN"]):
+            ssn_idx = idx
 
-            name_words = left_of_first_label(line, ["DOB", "Student ID", "Print Date"])
-            name_text = " ".join(t for _, _, t in name_words).strip()
-            if name_text:
-                result["Full Name"] = reformat_last_first_name(name_text)
-            else:
-                notes.append("Layout A: no name text found before the 'DOB:' label on its line")
-            break
+    if id_idx is not None:
+        cand = left_text(lines[id_idx])
+        if looks_like_name(cand):
+            return id_idx, cand
 
-    if header_idx is None:
-        notes.append("Layout A: 'DOB'/'Student ID' header line not found")
-    elif not result["Student ID"]:
-        notes.append("Layout A: 'Student ID' caption found but value blank")
+    for idx, line in enumerate(lines):
+        cand = left_text(line)
+        if HONORIFIC_RE.match(cand) and looks_like_name(cand):
+            return idx, cand
 
-    result["SSN"] = find_ssn_shape(lines)
-    if not result["SSN"]:
-        notes.append("Layout A: no SSN-shaped value found on this page")
+    if ssn_idx is not None and ssn_idx > 0:
+        cand = left_text(lines[ssn_idx - 1])
+        if looks_like_name(cand):
+            return ssn_idx - 1, cand
 
-    return result, notes
+    return None, ""
 
 
-# ===========================================================================
-# LAYOUT B ("Etran Omed Only") -- Address, ID Number, SSN, Birth Date/Name
-# ===========================================================================
-def parse_layout_b(lines):
-    result = {"Name": "", "Address": "", "ID Number": "", "SSN": "", "Birth Date": "", "Birth Name": ""}
+def parse_page(lines):
+    result = {c: "" for c in OUTPUT_COLUMNS}
     notes = []
 
+    # --- captioned right-hand-column fields -------------------------------
+    found_labels = set()
     for line in lines:
-        for out_key, variants in IDENTITY_LABELS_B.items():
-            if result[out_key]:
+        for out_key, lbl in IDENTITY_LABELS.items():
+            if out_key in found_labels:
                 continue
-            for variant in variants:
-                lbl = " ".join(variant)
-                spans = find_label_spans(line, [lbl])
-                if spans:
-                    vals, _ = label_values(line, [lbl])
-                    result[out_key] = " ".join(t for _, _, t in vals.get(lbl, []))
-                    break
+            if find_label_spans(line, [lbl]):
+                found_labels.add(out_key)
+                vals, _ = label_values(line, [lbl])
+                result[out_key] = " ".join(t for _, _, t in vals.get(lbl, [])).strip()
 
-    name_idx = None
-    for idx, line in enumerate(lines):
-        left_words = left_of_first_label(line, ALL_LABEL_STRINGS_B)
-        left_text = " ".join(t for _, _, t in left_words).strip()
-        if HONORIFIC_RE.match(left_text):
-            name_idx = idx
-            result["Name"] = HONORIFIC_RE.sub("", left_text).strip()
-            break
+    for k in IDENTITY_LABELS:
+        if k not in found_labels:
+            notes.append(f"'{k}' caption not found on this page")
+        elif not result[k] and k in FLAG_IF_BLANK:
+            notes.append(f"'{k}' caption found but value blank")
 
+    # --- name --------------------------------------------------------------
+    name_idx, raw_name = find_name_row(lines)
     if name_idx is None:
-        notes.append("Layout B: name line (starting with Mr./Ms./Mrs./Dr.) not found")
-    else:
-        addr_lines = []
-        found_csz = False
-        for idx in range(name_idx + 1, min(name_idx + 4, len(lines))):
-            left_words = left_of_first_label(lines[idx], ALL_LABEL_STRINGS_B)
-            text = " ".join(t for _, _, t in left_words).strip()
-            if not text:
-                break
-            addr_lines.append(text)
-            if CITY_STATE_ZIP_RE.match(text):
-                found_csz = True
-                break
-        if not found_csz:
-            notes.append("Layout B: address block found but no city/state/zip-shaped line within it -- check Address")
-        result["Address"] = ", ".join(addr_lines)
+        notes.append("Name row not found (no 'ID Number:' caption, no honorific row) "
+                     "-- Name and Address left blank")
+        return result, notes
 
-    for k in ["ID Number", "SSN", "Birth Date", "Birth Name"]:
-        if not result[k]:
-            notes.append(f"Layout B: '{k}' not found/blank")
+    full_name = clean_name_text(raw_name)
+    if not full_name:
+        notes.append("Name row located but the name cell was empty")
+    result["Full Name"] = full_name
+    result["FN"], result["MN"], result["LN"] = split_name(full_name)
+    if full_name and not result["LN"]:
+        notes.append("Name has only one word -- placed in FN, LN left blank")
+
+    # --- address -----------------------------------------------------------
+    addr_lines = collect_address_lines(lines, name_idx)
+    if not addr_lines:
+        notes.append("No address rows found below the name row -- Address blank")
+    else:
+        result["Address"] = ", ".join(addr_lines)
+        parts, addr_notes = split_address(addr_lines)
+        result.update(parts)
+        notes.extend(addr_notes)
 
     return result, notes
 
 
 # ===========================================================================
-# PER-PDF DRIVER (parses every page, then matches A -> B by SSN/Student ID)
+# PER-PDF DRIVER
 # ===========================================================================
 def process_pdf(path: Path):
     doc = fitz.open(str(path))
-    layout_a_records = []
-    layout_b_records = []
+    rows = []
+    image_only_pages = 0
 
     for i, page in enumerate(doc, start=1):
         text = page.get_text()
         if len(text.strip()) < MIN_TEXT_CHARS_PER_PAGE:
+            image_only_pages += 1
             continue
-        words = page.get_text("words")
-        lines = group_words_into_lines(words)
-        kind = classify_page(lines)
-        if kind == "A":
-            rec, notes = parse_layout_a(lines)
-            rec["_page"] = i
-            rec["_notes"] = notes
-            layout_a_records.append(rec)
-        elif kind == "B":
-            rec, notes = parse_layout_b(lines)
-            rec["_page"] = i
-            rec["_notes"] = notes
-            layout_b_records.append(rec)
-    doc.close()
-
-    rows = []
-    for b in layout_b_records:
-        row = {col: b.get(col, "") for col in ["Name", "Address", "ID Number", "SSN", "Birth Date", "Birth Name"]}
-        notes = list(b["_notes"])
-
-        match, match_key = None, None
-        if b.get("SSN"):
-            match = next((a for a in layout_a_records
-                          if a.get("SSN") and normalize_ssn_digits(a["SSN"]) == normalize_ssn_digits(b["SSN"])), None)
-            if match:
-                match_key = "SSN"
-        if match is None and b.get("ID Number"):
-            match = next((a for a in layout_a_records
-                          if a.get("Student ID") and a["Student ID"].strip() == b["ID Number"].strip()), None)
-            if match:
-                match_key = "Student ID"
-
-        if match and match.get("Full Name"):
-            row["Name"] = match["Full Name"]
-            notes.append(f"Name taken from Layout A page {match['_page']} (matched by {match_key}; full middle name)")
-        else:
-            notes.append("No matching Layout A (summary) record found -- Name kept as printed here "
-                         "(may be middle-initial-only)")
-
+        lines = group_words_into_lines(page.get_text("words"))
+        if classify_page(lines) != "B":
+            continue
+        row, notes = parse_page(lines)
         row["File Name"] = path.name
-        row["Page Number"] = b["_page"]
+        row["Page Number"] = i
         row["Extraction Notes"] = "; ".join(notes)
         rows.append(row)
+    doc.close()
 
-    return rows, len(layout_a_records), len(layout_b_records)
+    # A multi-page "Etran Omed Only" printout repeats the same identity
+    # block on continuation pages; keep the first page per person so one
+    # student doesn't come out as two address rows.
+    deduped, seen = [], set()
+    for r in rows:
+        key = (normalize_ssn_digits(r["SSN"]), r["ID Number"].strip(),
+               r["Full Name"].strip().lower())
+        if key != ("", "", "") and key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+
+    return deduped, len(rows) - len(deduped), image_only_pages
 
 
 # ===========================================================================
 # DEBUG (safe, PII-free diagnostic dump)
 # ===========================================================================
 KNOWN_DEBUG_LABELS = [
-    "DOB", "Student ID", "Print Date", "Transfer Credits", "Hours Attempted", "Hours Passed",
     "ID Number", "SSN", "Birth Date", "Birth Name", "Etran Omed Only",
+    "Course", "Title", "Page",
 ]
 
 
@@ -389,21 +553,16 @@ def debug_page(path: Path, page_num: int):
     print(f"text layer: {len(text.strip())} chars "
           f"({'OK' if len(text.strip()) >= MIN_TEXT_CHARS_PER_PAGE else 'BELOW MIN -- treated as image-only'})")
 
-    words = page.get_text("words")
-    lines = group_words_into_lines(words)
+    lines = group_words_into_lines(page.get_text("words"))
     kind = classify_page(lines)
-    print(f"page classified as: {kind or 'UNRECOGNIZED (neither Layout A nor Layout B markers found)'}")
-    if kind == "A":
-        rec, notes = parse_layout_a(lines)
-        print(f"  parsed Student ID: {'(found)' if rec['Student ID'] else '(blank)'}")
-        print(f"  parsed SSN (shape-based): {'(found)' if rec['SSN'] else '(NOT found)'}")
-        print(f"  parsed Full Name: {'(found)' if rec['Full Name'] else '(blank)'}")
-        if notes:
-            print(f"  notes: {'; '.join(notes)}")
-    elif kind == "B":
-        rec, notes = parse_layout_b(lines)
-        for k in ["Name", "Address", "ID Number", "SSN", "Birth Date", "Birth Name"]:
-            print(f"  parsed {k}: {'(found)' if rec.get(k) else '(blank)'}")
+    print(f"page classified as: {'Etran Omed Only (parsed)' if kind == 'B' else 'UNRECOGNISED (skipped)'}")
+    if kind == "B":
+        name_idx, _ = find_name_row(lines)
+        print(f"  name row index: {name_idx if name_idx is not None else '(not found)'}")
+        row, notes = parse_page(lines)
+        for k in ["Full Name", "FN", "MN", "LN", "Address", "Street", "Apt/Suite",
+                  "City", "State", "ZIP", "ID Number", "SSN", "Birth Date", "Birth Name"]:
+            print(f"  parsed {k}: {'(found)' if row.get(k) else '(blank)'}")
         if notes:
             print(f"  notes: {'; '.join(notes)}")
     print(f"lines detected: {len(lines)}")
@@ -425,7 +584,7 @@ def run_extraction(source_folder, dest_folder, status_callback):
     output_path = dst / OUTPUT_XLSX_NAME
 
     print("=" * 70)
-    print("Academic Transcript Identity Extractor")
+    print("Academic Transcript Identity Extractor  (Etran Omed Only layout)")
     print(f"Source:      {src}")
     print(f"Destination: {dst}")
     print("=" * 70)
@@ -442,11 +601,15 @@ def run_extraction(source_folder, dest_folder, status_callback):
     all_rows = []
     flagged = 0
     empty_files = []
+    image_only_total = 0
+    dupes_total = 0
     with tqdm(pdfs, desc="Extracting", unit="pdf", ncols=100) as pbar:
         for pdf_path in pbar:
             pbar.set_postfix_str(pdf_path.name)
-            rows, n_a, n_b = process_pdf(pdf_path)
-            if n_b == 0:
+            rows, dupes, image_only = process_pdf(pdf_path)
+            dupes_total += dupes
+            image_only_total += image_only
+            if not rows:
                 empty_files.append(pdf_path.name)
             for r in rows:
                 if r.get("Extraction Notes"):
@@ -455,7 +618,7 @@ def run_extraction(source_folder, dest_folder, status_callback):
             status_callback(f"Processed {pdf_path.name} ({len(all_rows)} row(s) so far)")
 
     if not all_rows:
-        print("No identity (Layout B / 'Etran Omed Only') pages found in any file -- nothing to write.")
+        print("No 'Etran Omed Only' pages found in any file -- nothing to write.")
         status_callback("Done. No identity pages found -- nothing written.")
         return False
 
@@ -464,10 +627,19 @@ def run_extraction(source_folder, dest_folder, status_callback):
 
     print(f"\nDone. {len(all_rows)} row(s) from {len(pdfs)} file(s) -> {output_path}")
     if flagged:
-        print(f"{flagged} row(s) have a non-empty 'Extraction Notes' -- spot-check those for missed/blank fields.")
+        print(f"{flagged} row(s) have a non-empty 'Extraction Notes' -- spot-check those "
+              f"for missed/blank fields (especially Address).")
+    if dupes_total:
+        print(f"{dupes_total} duplicate identity page(s) skipped (same SSN/ID/name repeated "
+              f"on a continuation page).")
+    if image_only_total:
+        print(f"{image_only_total} page(s) had no text layer (scanned image) and were skipped "
+              f"-- those need OCR before they can be read.")
     if empty_files:
         print(f"{len(empty_files)} file(s) had no identity page at all (nothing written for them): "
               + ", ".join(empty_files))
+    print("Reminder: save this workbook to the approved Global Insider folder, not the desktop, "
+          "and delete local copies once loaded.")
     status_callback(f"Done. {len(all_rows)} row(s) written to {output_path.name} ({flagged} flagged for review).")
     return True
 
