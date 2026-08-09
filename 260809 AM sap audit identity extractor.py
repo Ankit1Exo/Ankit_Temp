@@ -51,7 +51,13 @@ USAGE
     pasted into a ticket without exposing PII.
 
 REQUIREMENTS
-    pip install pymupdf pandas openpyxl tqdm
+    pip install pdfplumber pymupdf pandas openpyxl tqdm
+
+    pdfplumber is the important one. It and PyMuPDF are different text
+    engines and do not read every PDF the same way; on these reports
+    pdfplumber is the accurate one. If it is not installed the script
+    still runs on PyMuPDF, but may read fewer students -- the engine in
+    use is printed at the start of every run.
 
 SECURITY NOTE
     These reports contain SSNs and student names, and the output workbook
@@ -72,6 +78,15 @@ from tkinter import ttk, filedialog, messagebox
 import pymupdf as fitz
 import pandas as pd
 from tqdm import tqdm
+
+# pdfplumber (pdfminer.six underneath) and PyMuPDF are different text
+# engines, and they do not read every PDF the same way. On these reports
+# pdfplumber is the accurate one, so it is used whenever it is installed;
+# PyMuPDF stays as the fallback so the script still runs without it.
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
 
 OUTPUT_XLSX_NAME = "sap_audit_identity.xlsx"
 
@@ -112,6 +127,16 @@ FOLD = {
 }
 
 
+def fold(text):
+    """Fold dash-like and space-like characters to their ASCII form.
+
+    The report may print an SSN with U+2010 HYPHEN or U+2013 EN DASH --
+    indistinguishable on screen from "-", and matched by no pattern
+    written with "-". Folding first is what stops those SSNs being
+    invisible."""
+    return text.translate(FOLD)
+
+
 def page_lines(page):
     """Every printed line on the page, top to bottom, as plain text.
 
@@ -142,6 +167,38 @@ def page_lines(page):
         lines.append(current)
 
     return [" ".join(t for _, t in sorted(line)) for line in lines]
+
+
+ENGINE = "pdfplumber" if pdfplumber else "PyMuPDF"
+
+
+def page_texts(path: Path):
+    """Yield (page_number, lines, retry, char_count) for every page.
+
+    `retry` is a zero-argument function giving a SECOND reading of the same
+    page, used only when the first finds no students -- computing it up
+    front would double the cost of every page for the rare one that needs
+    it.
+
+    With pdfplumber, the first reading is layout mode, which preserves the
+    report's fixed-width spacing so each printed line comes back as one
+    line of text. Without pdfplumber, PyMuPDF words are grouped into lines
+    by coordinate."""
+    if pdfplumber is not None:
+        with pdfplumber.open(str(path)) as pdf:
+            for number, page in enumerate(pdf.pages, start=1):
+                layout = page.extract_text(layout=True) or ""
+                yield (number,
+                       [fold(t) for t in layout.splitlines() if t.strip()],
+                       lambda p=page: [fold(t) for t in (p.extract_text() or "").splitlines()
+                                       if t.strip()],
+                       len(layout.strip()))
+        return
+
+    doc = fitz.open(str(path))
+    for number, page in enumerate(doc, start=1):
+        yield number, page_lines(page), (lambda: []), len(page.get_text().strip())
+    doc.close()
 
 
 def split_name(name, notes):
@@ -272,18 +329,19 @@ def parse_line(text):
 
 def process_pdf(path: Path):
     """(rows, pages_with_no_text_layer)."""
-    doc = fitz.open(str(path))
     rows, image_only = [], []
-    for page_num, page in enumerate(doc, start=1):
-        if len(page.get_text().strip()) < 20:
+    for page_num, lines, retry, chars in page_texts(path):
+        if chars < 20:
             image_only.append(page_num)
             continue
-        for text in page_lines(page):
-            row = parse_line(text)
-            if row:
-                row["File Name"], row["Page Number"] = path.name, page_num
-                rows.append(row)
-    doc.close()
+
+        found = [r for r in (parse_line(t) for t in lines) if r]
+        if not found:
+            found = [r for r in (parse_line(t) for t in retry()) if r]
+
+        for row in found:
+            row["File Name"], row["Page Number"] = path.name, page_num
+        rows.extend(found)
     return rows, image_only
 
 
@@ -323,6 +381,7 @@ def write_diagnostic(source_folder, dest_folder, max_files=3, max_pages=2):
 
     pdfs = sorted(src.rglob("*.pdf"))[:max_files]
     out = ["SAP Audit Identity Extractor -- diagnostic",
+           f"Text engine: {ENGINE}",
            "Every value below is masked: # = a digit, X = a letter.",
            "Only the report's own captions are left readable. Safe to share.",
            f"(first {max_pages} page(s) of the first {max_files} file(s))", ""]
@@ -331,14 +390,11 @@ def write_diagnostic(source_folder, dest_folder, max_files=3, max_pages=2):
         out.append(f"No PDF files found in {src}")
 
     for path in pdfs:
-        doc = fitz.open(str(path))
-        out.append(f"=== {path.name} ({len(doc)} pages) ===")
-        for page_num, page in enumerate(doc, start=1):
+        out.append(f"=== {path.name} ===")
+        for page_num, lines, retry, chars in page_texts(path):
             if page_num > max_pages:
                 break
-            chars = len(page.get_text().strip())
-            lines = page_lines(page)
-            out.append(f"-- page {page_num}: {chars} chars of text, {len(lines)} lines rebuilt"
+            out.append(f"-- page {page_num}: {chars} chars of text, {len(lines)} lines"
                        + ("" if chars >= 20 else "   <-- SCANNED IMAGE, no text layer; "
                                                  "needs OCR before anything can be read"))
             for i, text in enumerate(lines):
@@ -349,39 +405,33 @@ def write_diagnostic(source_folder, dest_folder, max_files=3, max_pages=2):
             out.append(f"-- students found on page {page_num}: "
                        f"{sum(1 for t in lines if parse_line(t))}")
             out.append("")
-        doc.close()
 
     report_path.write_text("\n".join(out), encoding="utf-8")
     return report_path
 
 
 def debug_page(path: Path, page_num: int):
-    doc = fitz.open(str(path))
-    if not 1 <= page_num <= len(doc):
-        print(f"{path.name}: page {page_num} out of range ({len(doc)} page(s))")
-        doc.close()
+    for number, lines, retry, chars in page_texts(path):
+        if number != page_num:
+            continue
+        print(f"--- {path.name} page {page_num}  (engine: {ENGINE}) ---")
+        print(f"text layer: {chars} chars"
+              + ("" if chars >= 20 else "  <-- scanned image, no text; needs OCR first"))
+        print(f"lines: {len(lines)}")
+
+        found = 0
+        for i, text in enumerate(lines):
+            row = parse_line(text)
+            flag = ""
+            if row:
+                found += 1
+                flag = "  <-- STUDENT"
+            elif SSN_RE.search(text):
+                flag = "  <-- has an SSN but no name after it"
+            print(f"  [{i:>3}] {mask(text)}{flag}")
+        print(f"students found: {found}")
         return
-
-    page = doc[page_num - 1]
-    chars = len(page.get_text().strip())
-    lines = page_lines(page)
-    print(f"--- {path.name} page {page_num} ---")
-    print(f"text layer: {chars} chars"
-          + ("" if chars >= 20 else "  <-- scanned image, no text; needs OCR first"))
-    print(f"lines rebuilt: {len(lines)}")
-
-    found = 0
-    for i, text in enumerate(lines):
-        row = parse_line(text)
-        flag = ""
-        if row:
-            found += 1
-            flag = "  <-- STUDENT"
-        elif SSN_RE.search(text):
-            flag = "  <-- has an SSN but no name after it"
-        print(f"  [{i:>3}] {mask(text)}{flag}")
-    print(f"students found: {found}")
-    doc.close()
+    print(f"{path.name}: page {page_num} not found")
 
 
 # ===========================================================================
@@ -396,8 +446,12 @@ def run_extraction(source_folder, dest_folder, status_callback):
     output_path = dst / OUTPUT_XLSX_NAME
 
     print("=" * 70)
-    print(f"SAP Audit Identity Extractor\nSource:      {src}\nDestination: {dst}")
+    print(f"SAP Audit Identity Extractor\nText engine: {ENGINE}\n"
+          f"Source:      {src}\nDestination: {dst}")
     print("=" * 70)
+    if pdfplumber is None:
+        print("NOTE: pdfplumber is not installed, so the less accurate PyMuPDF engine is in use.\n"
+              "      Install it with:   pip install pdfplumber")
 
     pdfs = sorted(src.rglob("*.pdf"))
     if not pdfs:
