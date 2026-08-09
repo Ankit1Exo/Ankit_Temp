@@ -72,6 +72,7 @@ OUTPUT_XLSX_NAME = "transcript_identity_extracted.xlsx"
 HONORIFIC_RE = re.compile(r"^(Mr|Mrs|Ms|Miss|Dr)\.?\s*", re.IGNORECASE)
 CITY_STATE_ZIP_RE = re.compile(r"^(?P<city>.+?),?\s*(?P<state>[A-Z]{2})\s+(?P<zip>\d{5}(?:-\d{4})?)\b")
 SSN_TOKEN_FULL_RE = re.compile(r"^\d{3}-\d{2}-\d{4}$|^\d{9}$")
+APT_LINE_RE = re.compile(r"^(apt|suite|unit|ste)\b", re.IGNORECASE)
 
 IDENTITY_LABELS_B = {
     "ID Number": [["ID Number"]],
@@ -82,7 +83,10 @@ IDENTITY_LABELS_B = {
 ALL_LABEL_STRINGS_B = [" ".join(v) for variants in IDENTITY_LABELS_B.values() for v in variants]
 
 OUTPUT_COLUMNS = [
-    "File Name", "Page Number", "Name", "Address",
+    "File Name", "Page Number",
+    "Name (As Printed)", "Name (Full Middle Name)",
+    "First Name", "Middle Name", "Last Name",
+    "Address", "Street", "Apt/Suite", "City", "State", "Zip",
     "ID Number", "SSN", "Birth Date", "Birth Name", "Extraction Notes",
 ]
 
@@ -180,6 +184,46 @@ def reformat_last_first_name(name_text):
         return name_text
     last, _, rest = name_text.partition(",")
     return f"{rest.strip()} {last.strip()}".strip()
+
+
+def split_name_parts(name_text):
+    """Best-effort "First [Middle...] Last" split. 1 token -> First only;
+    2 tokens -> First/Last, Middle blank; 3+ tokens -> first token is
+    First, last token is Last, everything between is Middle."""
+    tokens = name_text.split()
+    if not tokens:
+        return "", "", ""
+    if len(tokens) == 1:
+        return tokens[0], "", ""
+    if len(tokens) == 2:
+        return tokens[0], "", tokens[1]
+    return tokens[0], " ".join(tokens[1:-1]), tokens[-1]
+
+
+def split_address_parts(addr_lines):
+    """addr_lines: the raw (unjoined) address line strings collected for
+    one record, in reading order -- the last one is expected to be the
+    city/state/zip line, an optional Apt/Suite line may sit between the
+    street line and it. Returns (street, apt_suite, city, state, zip)."""
+    street, apt, city, state, zip_code = "", "", "", "", ""
+    remaining = list(addr_lines)
+    if remaining:
+        m = CITY_STATE_ZIP_RE.match(remaining[-1])
+        if m:
+            city = m.group("city").rstrip(",").strip()
+            state = m.group("state")
+            zip_code = m.group("zip")
+            remaining = remaining[:-1]
+    if remaining:
+        street = remaining[0]
+        for line in remaining[1:]:
+            if APT_LINE_RE.match(line.strip()):
+                apt = f"{apt} {line}".strip() if apt else line
+            else:
+                # doesn't look like an Apt/Suite line -- fold it into
+                # Street rather than mislabeling it as Apt/Suite
+                street = f"{street} {line}".strip()
+    return street, apt, city, state, zip_code
 
 
 # ===========================================================================
@@ -280,6 +324,7 @@ def parse_layout_b(lines):
         if not found_csz:
             notes.append("Layout B: address block found but no city/state/zip-shaped line within it -- check Address")
         result["Address"] = ", ".join(addr_lines)
+        result["_address_lines"] = addr_lines
 
     for k in ["ID Number", "SSN", "Birth Date", "Birth Name"]:
         if not result[k]:
@@ -317,8 +362,11 @@ def process_pdf(path: Path):
 
     rows = []
     for b in layout_b_records:
-        row = {col: b.get(col, "") for col in ["Name", "Address", "ID Number", "SSN", "Birth Date", "Birth Name"]}
+        row = {col: b.get(col, "") for col in ["Address", "ID Number", "SSN", "Birth Date", "Birth Name"]}
         notes = list(b["_notes"])
+
+        as_printed_name = b.get("Name", "")
+        row["Name (As Printed)"] = as_printed_name
 
         match, match_key = None, None
         if b.get("SSN"):
@@ -332,12 +380,17 @@ def process_pdf(path: Path):
             if match:
                 match_key = "Student ID"
 
+        full_middle_name = ""
         if match and match.get("Full Name"):
-            row["Name"] = match["Full Name"]
-            notes.append(f"Name taken from Layout A page {match['_page']} (matched by {match_key}; full middle name)")
+            full_middle_name = match["Full Name"]
+            notes.append(f"'Name (Full Middle Name)' taken from Layout A page {match['_page']} (matched by {match_key})")
         else:
-            notes.append("No matching Layout A (summary) record found -- Name kept as printed here "
-                         "(may be middle-initial-only)")
+            notes.append("No matching Layout A (summary) record found -- 'Name (Full Middle Name)' left blank")
+        row["Name (Full Middle Name)"] = full_middle_name
+
+        row["First Name"], row["Middle Name"], row["Last Name"] = split_name_parts(full_middle_name or as_printed_name)
+        row["Street"], row["Apt/Suite"], row["City"], row["State"], row["Zip"] = \
+            split_address_parts(b.get("_address_lines", []))
 
         row["File Name"] = path.name
         row["Page Number"] = b["_page"]
