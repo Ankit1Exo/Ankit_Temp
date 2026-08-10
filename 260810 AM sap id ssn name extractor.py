@@ -844,17 +844,37 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("SAP Audit  --  ID / SSN / Name Extractor")
-        self.root.geometry("640x300")
+        # Tall enough for every widget. The Extract button is also packed
+        # against the bottom edge (see _build), so shrinking the window
+        # eats into the middle rather than hiding the button.
+        self.root.geometry("700x430")
+        self.root.minsize(560, 380)
         self.src = tk.StringVar()
         self.dst = tk.StringVar()
         self.status = tk.StringVar(value="Choose a source folder and a destination folder.")
         self.eta = tk.StringVar(value="")
         self.engine = tk.StringVar(value="auto")
         self.workers = tk.IntVar(value=max(1, (os.cpu_count() or 2) - 1))
+        # Disabling the button is not enough on its own: the Return key is
+        # bound to the same action and would bypass it, starting a second
+        # run over the same folder while the first is still writing.
+        self.running = False
         self._build()
 
     def _build(self):
         pad = {"padx": 10, "pady": 4}
+
+        # The action bar is packed FIRST, against the bottom edge. With
+        # pack(), whatever claims side="bottom" earliest is placed outermost,
+        # so the Extract button keeps its space no matter how many widgets
+        # go above it or how small the window gets. Packing it last -- which
+        # is what hid it -- leaves it competing for whatever is left over.
+        bottom = tk.Frame(self.root)
+        bottom.pack(side="bottom", fill="x", pady=(4, 10))
+        self.go = tk.Button(bottom, text="Extract", command=self._start,
+                            width=18, height=2, default="active")
+        self.go.pack()
+        self.root.bind("<Return>", lambda _e: self._start())
 
         tk.Label(self.root, text="Source folder (PDFs)", anchor="w").pack(fill="x", **pad)
         row = tk.Frame(self.root); row.pack(fill="x", **pad)
@@ -869,13 +889,17 @@ class App:
 
         row = tk.Frame(self.root); row.pack(fill="x", **pad)
         tk.Label(row, text="Engine").pack(side="left")
-        ttk.Combobox(row, textvariable=self.engine, width=10, state="readonly",
+        ttk.Combobox(row, textvariable=self.engine, width=9, state="readonly",
                      values=["auto", "mupdf", "plumber"]).pack(side="left", padx=6)
-        tk.Label(row, text="   Parallel files").pack(side="left")
+        tk.Label(row, text="Parallel files").pack(side="left", padx=(12, 0))
         tk.Spinbox(row, from_=1, to=32, textvariable=self.workers,
-                   width=5).pack(side="left", padx=6)
-        tk.Label(row, text="  (auto = fast engine, slow one only if a file reads empty)",
+                   width=4).pack(side="left", padx=6)
+        tk.Label(row, text=f"of {os.cpu_count() or '?'} cores",
                  fg="#555").pack(side="left")
+
+        tk.Label(self.root, anchor="w", fg="#555", justify="left",
+                 text="auto = fast engine, slow one retried only if a file reads empty"
+                 ).pack(fill="x", padx=10)
 
         tk.Label(
             self.root,
@@ -886,12 +910,12 @@ class App:
         ).pack(fill="x", **pad)
 
         self.bar = ttk.Progressbar(self.root, orient="horizontal",
-                                   mode="determinate", length=600)
-        self.bar.pack(**pad)
-        tk.Label(self.root, textvariable=self.status, anchor="w").pack(fill="x", **pad)
-        tk.Label(self.root, textvariable=self.eta, anchor="w").pack(fill="x", **pad)
-        self.go = tk.Button(self.root, text="Extract", command=self._start, width=18)
-        self.go.pack(pady=8)
+                                   mode="determinate")
+        self.bar.pack(fill="x", **pad)
+        tk.Label(self.root, textvariable=self.status, anchor="w",
+                 wraplength=660, justify="left").pack(fill="x", **pad)
+        tk.Label(self.root, textvariable=self.eta, anchor="w",
+                 wraplength=660, justify="left").pack(fill="x", **pad)
 
     def _pick_src(self):
         path = filedialog.askdirectory(title="Folder containing the SAP audit PDFs")
@@ -911,6 +935,8 @@ class App:
         self.root.update_idletasks()
 
     def _start(self):
+        if self.running:
+            return
         src, dst = Path(self.src.get()), Path(self.dst.get())
         if not src.is_dir():
             messagebox.showerror("Source folder", "Choose a valid source folder.")
@@ -918,6 +944,7 @@ class App:
         if not dst.is_dir():
             messagebox.showerror("Destination folder", "Choose a valid destination folder.")
             return
+        self.running = True
         self.go.config(state="disabled")
         threading.Thread(target=self._run, args=(src, dst), daemon=True).start()
 
@@ -975,6 +1002,7 @@ class App:
             self._set("Failed -- see the console.")
             messagebox.showerror("Failed", traceback.format_exc(limit=3))
         finally:
+            self.running = False
             self.go.config(state="normal")
 
     def run(self):
