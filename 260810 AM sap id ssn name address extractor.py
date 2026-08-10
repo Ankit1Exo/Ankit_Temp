@@ -5,33 +5,53 @@ Reads "Satisfactory Academic Progress Audit Report" PDFs and writes four
 fields per student -- Student ID, SSN, Name, Address -- into one Excel
 workbook, with a reconciliation sheet that says whether anything was lost.
 
-TWO INDEPENDENT WAYS TO READ A PAGE
+TWO REPORT LAYOUTS, AND WHY THAT DECIDES THE DESIGN
+    Two reports need reading and they do not agree on field order:
+
+        SAP audit report        Student ID   SSN            Name
+        NSC analytical report   Student ID   Name/Address   SSN   Enrollment...
+
+    In the NSC report the name is printed to the LEFT of the SSN. What sits
+    to its right is the enrollment status -- so anything that reads the name
+    from a fixed side of the SSN fills the Name column with "Half time or
+    more". That failure is worth describing because of how it looks: every
+    cell is populated, nothing is blank, and it passes a glance. It only
+    gives itself away as four distinct values repeated down every row.
+
+    So the side is measured, never assumed. The ID is the leftmost ID-shaped
+    token and the name is whatever is left over beside it; if nothing is
+    left over, the name is on the other side of the SSN. That one rule reads
+    both reports, and a third one it has not seen.
+
+TWO INDEPENDENT READERS
+    text     The page's plain text lines. No geometry at all -- the SSN
+             anchors the line and the fields are cut from around it.
+
     format   Words with their x/y boxes. Printed rows are rebuilt from the
-             y coordinates, and the fields are cut out using the report's
-             own column bands, found by locating the ID / SSN / Name
-             headings and measuring where each one sits.
+             y coordinates and fields are cut using the report's own column
+             bands, measured by finding the ID / SSN / Name headings.
 
-    text     The page's plain text lines. No geometry at all -- fields are
-             found by pattern: the SSN anchors the line, the ID is the
-             token to its left, the name is what follows.
+    THE TEXT READER RUNS FIRST, and then the data is arranged. It needs
+    nothing from the page but its characters: no heading row to find, no
+    bands to measure. So it runs on every file, including the ones where the
+    geometry cannot get started, and putting it first means the worst case
+    for any page is the reader that always works.
 
-    format runs first, because column geometry can keep a name apart from
-    the value printed beside it even when the two collide once the page is
-    flattened to a string.
+    The geometry runs second and earns its place where the flat text
+    genuinely cannot separate the fields. Under a combined "Name/Address"
+    heading the address has its own lines but not its own place in the text:
+    flattened, an address line and whatever was printed across from it
+    become one string. Only position tells them apart.
 
-    text runs when format cannot deliver:
-        - the page has no heading row to measure columns from
-        - the text layer has no usable word boxes
-        - format found the row but left a field empty
+    Neither reader is trusted over the other on principle -- the result
+    decides. Whichever found more students wins, the other fills its blanks,
+    and an address measured from a column beats one inferred from shape.
+    They are separate code paths over separate representations of the page,
+    because a fallback that shares the step that failed is not a fallback.
 
-    They are deliberately separate code paths over separate
-    representations of the page. A fallback that shares the step that
-    failed is not a fallback.
-
-    Every row records which path produced it in the Method column, so a
-    run can be judged rather than assumed: "format" throughout means the
-    geometry held; a page of "text" means the headings were not found and
-    the looser rule did the work.
+    Every row records its reader in the Method column. With the text reader
+    first, "text" is the normal answer and is not a warning; "format" means
+    the geometry found students the text could not.
 
 WHERE THE ADDRESS COMES FROM
     The address is looked for in three places, in this order, and the row
@@ -190,12 +210,36 @@ SSN_RE = re.compile(
 
 # A whole token that is SSN-shaped. Confirms that the value sitting between
 # the ID and the name IS the SSN; it is not used to go looking for one.
-SSN_TOKEN_RE = re.compile(r"^[0-9X*#?]{3}-?[0-9X*#?]{2}-?[0-9X*#?]{4}$")
+def is_ssn_token(text):
+    """True when a whole token is an SSN.
+
+    This is SSN_RE anchored, and it must stay that way. An earlier version
+    allowed the separators to be optional -- [0-9]{3}-?[0-9]{2}-?[0-9]{4} --
+    which also matches a ZIP+4: "19901-4412" is three digits, two digits, a
+    dash and four digits. The reader then found an "SSN" on an address line
+    and invented a student called "Dover, DE" out of it.
+
+    A shape loose enough to find an SSN anywhere is loose enough to find one
+    where there is none, and a fabricated student is worse than a missed
+    field: nothing downstream can tell it is not real.
+    """
+    return bool(SSN_RE.fullmatch(text))
 
 # An ID as printed: digits, possibly with a letter prefix or a dash.
 ID_TOKEN_RE = re.compile(r"^[A-Za-z]{0,3}[-]?\d[\dA-Za-z-]*$")
 
-ACADEMIC_RE = re.compile(r"\bacademic\s*program\b", re.IGNORECASE)
+# A caption that only ever appears on a student's own line. Each report has
+# one, and it is a second way -- independent of the SSN -- to know a student
+# is on the line. The optional leading single letter absorbs the status code
+# the NSC report prints in front of the words ("H Half time or more"), so the
+# code does not get taken for the tail of a name.
+STUDENT_CAPTION_RE = re.compile(
+    r"\bacademic\s*program\b"
+    r"|(?:\b[A-Za-z]\s+)?(?:\b(?:half|full)\s+time\b"
+    r"|\bless\s+than\s+half\b|\bwithdrawn\b|\bgraduated\b|\bdeceased\b"
+    r"|\bleave\s+of\s+absence\b)",
+    re.IGNORECASE,
+)
 
 # The trailing "(?:\s+|(?=[A-Z]))" is load bearing twice over:
 #   "Mroz Dana K"  "Mr" matches, no dot follows, and the next character is a
@@ -207,14 +251,27 @@ ACADEMIC_RE = re.compile(r"\bacademic\s*program\b", re.IGNORECASE)
 #                  backtracks to "Mrs", and the dot and space then match.
 PREFIX_RE = re.compile(r"^((?:Mr|Mrs|Ms|Miss|Dr|Prof)\.?)(?:\s+|(?=[A-Z]))")
 
+# A single letter, with or without a full stop -- a middle initial inside a
+# name, but never a name in its own right.
+INITIAL_RE = re.compile(r"^[A-Za-z]\.?$")
+
 # The name ends at the first token that is one of these captions, holds a
 # digit, or ends in a colon. Without it the name runs on into the report
 # furniture -- "Liam O'Brien SAP Type: DHDHS" is the shape of the mistake.
 NAME_STOP_WORDS = {
+    # the SAP audit report's captions
     "academic", "program", "sap", "type", "excluded", "remedial",
     "credits", "credit", "incl", "gpa", "status", "degree", "major",
     "cmpl", "att", "pgm", "earn", "eval", "cum", "grd", "term", "dt",
     "course", "section", "skipped", "total", "page", "batch", "report",
+    # the NSC analytical report's captions and its enrollment statuses.
+    # These earn their place: this column sits directly beside the name, and
+    # without them the Name field fills up with "Half time or more" -- which
+    # looks like a successful extraction because every cell has something in
+    # it, and only gives itself away as four values repeated over 5,000 rows.
+    "enrollment", "agd", "begin", "end", "half", "full", "time", "less",
+    "than", "more", "withdrawn", "graduated", "deceased", "leave",
+    "absence", "nsc", "analytical", "record", "found", "name/address",
 }
 
 # Part of a name, so they must survive the stop test above.
@@ -360,7 +417,7 @@ def available_engines():
 # ===========================================================================
 # column geometry  --  the "format" half
 # ===========================================================================
-Columns = namedtuple("Columns", "bands header_text")
+Columns = namedtuple("Columns", "bands header_text combined")
 
 WANTED_CAPTIONS = ("id", "ssn", "name", "address")
 
@@ -371,25 +428,43 @@ def find_columns(lines):
     Returns Columns, or None if this page has no heading row.
 
     The heading row must carry ID, SSN and Name together. Requiring all
-    three is what stops the course heading -- "Course Name Term/Dt Grd
-    Cum ..." -- being mistaken for it, since that line also contains the
-    word "Name".
+    three is what stops the SAP report's course heading -- "Course Name
+    Term/Dt Grd Cum ..." -- being mistaken for it, since that line also
+    contains the word "Name".
+
+    What it must NOT do is require them in a particular ORDER. Two reports
+    that both need reading disagree about it:
+
+        Student ID   SSN   Name              the SAP audit report
+        Student ID   Name/Address   SSN      the NSC analytical report
+
+    An earlier version demanded id < ssn < name and so found no heading row
+    at all on the NSC report, which threw every page onto the looser reader.
+    Order is measured here and used later; it is never assumed.
+
+    "Name/Address" is one heading over two fields, printed on separate lines
+    -- the name on the student's line, the address beneath it. Both fields
+    get the same band and `combined` records that they share it, because the
+    address then has to be read DOWN the column rather than across the row.
 
     A band runs from just left of its own caption to just left of the next
-    caption on the heading row, whatever that next caption is. The first
-    band starts at 0 rather than at its caption, because numeric columns in
-    this report are often right-aligned and the value then begins to the
-    LEFT of the word "ID".
+    caption, whatever that next caption is. The first band starts at 0
+    rather than at its caption, because a numeric column is often
+    right-aligned and its values then begin to the LEFT of the heading word.
     """
     for line in lines:
-        seen = {}
+        seen, combined = {}, False
         for word in line.words:
             key = word.text.strip(":.").lower()
-            if key in WANTED_CAPTIONS and key not in seen:
-                seen[key] = word
+            if key in ("name/address", "name/addr", "student"):
+                if key != "student":
+                    seen.setdefault("name", word)
+                    seen.setdefault("address", word)
+                    combined = True
+                continue
+            if key in WANTED_CAPTIONS:
+                seen.setdefault(key, word)
         if not {"id", "ssn", "name"} <= set(seen):
-            continue
-        if not seen["id"].x0 < seen["ssn"].x0 < seen["name"].x0:
             continue
 
         anchors = sorted(line.words, key=lambda w: w.x0)
@@ -399,7 +474,7 @@ def find_columns(lines):
             left = 0.0 if word is anchors[0] else word.x0 - pad
             right = (min(following) - pad) if following else float("inf")
             bands[key] = (left, right)
-        return Columns(bands=bands, header_text=line.text)
+        return Columns(bands=bands, header_text=line.text, combined=combined)
     return None
 
 
@@ -485,6 +560,13 @@ def clean_name(tokens, notes):
     if PREFIX_RE.match(name) and len(name.split()) == 1:
         # An honorific with nothing after it is not a name.
         return ""
+    if INITIAL_RE.match(name):
+        # A lone letter is never a person. It is the NSC report's enrollment
+        # status code ("H Half time or more") left behind after the words are
+        # trimmed off, and without this guard it becomes the Name -- so the
+        # workbook fills with one-letter names that all look plausible
+        # individually.
+        return ""
     return name
 
 
@@ -512,7 +594,10 @@ def looks_like_address(text):
         return True
     if lowered & STREET_WORDS and HOUSE_NUMBER_RE.match(text):
         return True
-    if lowered & STREET_WORDS and len(tokens) >= 2:
+    if lowered & STREET_WORDS and len(tokens) >= 2 and re.search(r"\d", text):
+        # The digit is required. A street word plus any other word is far too
+        # little on its own: the column heading fragment "Ct SSN" satisfied it
+        # and became somebody's address. Every real address carries a number.
         return True
     if tokens[0].strip(".").lower() in {"po", "p.o"} or lowered & {"box"}:
         return bool(re.search(r"\d", text))
@@ -608,6 +693,63 @@ def split_name_and_address(tokens):
     return name_tokens, ""
 
 
+def note_ssn_shape(ssn, notes):
+    if not ssn:
+        return
+    if "-" not in ssn and ssn.isdigit():
+        notes.append("SSN printed without separators -- copied exactly as printed")
+    elif re.search(r"[X*#?]", ssn):
+        notes.append("SSN is partly masked in the source PDF")
+
+
+def cut_fields(before, after, notes):
+    """(student_id, name, same_line_address) from the tokens around the SSN.
+
+    `before` and `after` are the tokens printed left and right of the SSN.
+
+    The side the NAME sits on is worked out, not assumed, and that is the
+    whole point of this function. The two reports disagree:
+
+        1237906  555-11-1427  Mrs. Birtukhan Abate      name to the RIGHT
+        1234506  Alvarez, Ana  555-01-2345  H Half...   name to the LEFT
+
+    Reading a fixed side is what put "Half time or more" in the Name column
+    of the NSC report: to the right of that report's SSN is the enrollment
+    status, not a person.
+
+    The rule that covers both: the ID is the leftmost ID-shaped token, and
+    the name is whatever is LEFT OVER on that side once the ID is taken. If
+    nothing is left over -- the SAP shape, where the SSN follows the ID
+    immediately -- the name is on the right instead.
+
+    It is self-correcting rather than clever. Anything left over that is
+    report furniture is thrown away by trim_name, which empties the left
+    side and sends the search to the right anyway.
+    """
+    student_id, rest = "", list(before)
+    for i, token in enumerate(before):
+        if ID_TOKEN_RE.match(token) and re.search(r"\d", token):
+            student_id, rest = token, list(before[i + 1:])
+            break
+
+    left_name = trim_name(rest)
+    if left_name:
+        name_tokens = left_name
+        # With the name on the left, everything right of the SSN is other
+        # columns -- status, dates, credits. Only text that passes the strict
+        # address test is taken from there, so a status never lands in Address.
+        leftover = " ".join(rest[len(left_name):]).strip(" ,;:-")
+        tail = " ".join(after).strip(" ,;:-")
+        same_line = next((t for t in (leftover, tail)
+                          if t and looks_like_address(t)), "")
+    else:
+        name_tokens, same_line = split_name_and_address(after)
+
+    if before and not student_id:
+        notes.append("nothing ID-shaped was printed left of the SSN")
+    return student_id, clean_name(name_tokens, notes), same_line
+
+
 def make_row(student_id, ssn, name, address, address_source,
              method, source_line, notes):
     """Assemble one output row, or None if there is no student here."""
@@ -636,7 +778,37 @@ def make_row(student_id, ssn, name, address, address_source,
 # ===========================================================================
 # the format half  --  fields from column bands
 # ===========================================================================
-def format_row(line, columns, following_texts):
+def gather_address_in_band(following_lines, band, unit):
+    """The address printed DOWN a column, beneath the student's line.
+
+    This is what the geometry buys that the flat text cannot. Under a
+    combined "Name/Address" heading the address occupies its own lines but
+    NOT its own place in the text: flattened, an address line and whatever
+    else was printed across from it become one string. Reading only the
+    words that sit inside the column keeps them apart.
+    """
+    parts, skipped = [], 0
+    for line in following_lines[:MAX_ADDRESS_LINES + 3]:
+        if SSN_RE.search(line.text):            # the next student
+            break
+        words = [w for w in line.words if near_band(w, band, unit, slack=1)]
+        text = " ".join(w.text for w in words).strip()
+        if text and looks_like_address(text):
+            parts.append(text)
+            if len(parts) >= MAX_ADDRESS_LINES:
+                break
+            continue
+        if parts:
+            break
+        if skipped < 2 and (not text or is_wrap_fragment(text)
+                            or is_report_furniture(line.text)):
+            skipped += 1
+            continue
+        break
+    return ", ".join(parts)
+
+
+def format_row(line, columns, following_lines):
     """One student row from a positioned line, using the column bands."""
     bands = columns.bands
     notes = []
@@ -647,7 +819,7 @@ def format_row(line, columns, following_texts):
     # measured column rather than being looked for inside it. Searching inside
     # the band instead would mean a page whose bands are slightly off loses
     # every student on it.
-    candidates = [w for w in line.words if SSN_TOKEN_RE.match(w.text)]
+    candidates = [w for w in line.words if is_ssn_token(w.text)]
     if not candidates:
         return None
     in_column = [w for w in candidates if near_band(w, bands["ssn"], unit)]
@@ -658,36 +830,15 @@ def format_row(line, columns, following_texts):
         notes.append("the SSN is nowhere near the measured SSN column -- found "
                      "by pattern instead; check the bands with --columns")
     ssn = ssn_word.text
+    note_ssn_shape(ssn, notes)
 
-    if "-" not in ssn and ssn.isdigit():
-        notes.append("SSN printed without separators -- copied exactly as printed")
-    elif re.search(r"[X*#?]", ssn):
-        notes.append("SSN is partly masked in the source PDF")
-
-    # ID: the nearest value left of the SSN. Preferring the measured ID column
-    # keeps a stray label out of the field; if nothing sits there, the word
-    # physically closest to the left of the SSN is the ID.
-    left_of_ssn = [w for w in line.words if w.x1 <= ssn_word.x0]
-    id_candidates = [w for w in left_of_ssn if near_band(w, bands["id"], unit)]
-    if not id_candidates:
-        id_candidates = left_of_ssn
-        if id_candidates:
-            notes.append("the ID is not near the measured ID column -- took the "
-                         "value printed nearest left of the SSN")
-    student_id = ""
-    if id_candidates:
-        chosen = max(id_candidates, key=lambda w: w.x0)
-        student_id = chosen.text
-        if not ID_TOKEN_RE.match(student_id):
-            notes.append("the value left of the SSN is not ID-shaped -- "
-                         "copied exactly as printed; verify it")
-
+    before = [w for w in line.words if w.x1 <= ssn_word.x0]
     after = [w for w in line.words if w.x0 >= ssn_word.x1]
 
     address, address_source = "", ""
-    if "address" in bands:
-        # An explicit Address column is the best answer available: no
-        # guessing about what is or is not address-shaped.
+    if "address" in bands and not columns.combined:
+        # An Address column of its own is the best answer available: nothing
+        # has to be guessed about what is or is not address-shaped.
         in_column = [w for w in after if in_band(w, bands["address"])]
         if in_column:
             in_column += extend_past_band(after, in_column[-1], unit)
@@ -696,13 +847,17 @@ def format_row(line, columns, following_texts):
             consumed = {id(w) for w in in_column}
             after = [w for w in after if id(w) not in consumed]
 
-    name_tokens, same_line = split_name_and_address([w.text for w in after])
-    name = clean_name(name_tokens, notes)
+    student_id, name, same_line = cut_fields(
+        [w.text for w in before], [w.text for w in after], notes)
 
     if not address and same_line:
         address, address_source = same_line, "same line"
+    if not address and "address" in bands:
+        below = gather_address_in_band(following_lines, bands["address"], unit)
+        if below:
+            address, address_source = below, "below (column)"
     if not address:
-        below = gather_address(following_texts)
+        below = gather_address([l.text for l in following_lines])
         if below:
             address, address_source = below, "below"
 
@@ -722,11 +877,11 @@ def caption_row(text, following_texts, method):
     SSNs with the same patterns that just failed.
 
     Everything before the caption is the student's own data in printed order:
-    ID, then SSN, then name. Every field gets a loud note, because a row that
-    reached this function was assembled without the one field whose shape
-    could confirm it.
+    ID, then SSN if one was printed, then name. Every field gets a loud note,
+    because a row that reached this function was assembled without the one
+    field whose shape could confirm it.
     """
-    caption = ACADEMIC_RE.search(text)
+    caption = STUDENT_CAPTION_RE.search(text)
     if not caption:
         return None
     tokens = text[:caption.start()].split()
@@ -734,7 +889,7 @@ def caption_row(text, following_texts, method):
         return None
 
     notes = ["no SSN-shaped value on this line -- the student was recovered "
-             "from the 'Academic Program' caption; verify every field"]
+             "from the report's own student caption; verify every field"]
     student_id, rest = tokens[0], tokens[1:]
 
     ssn = ""
@@ -761,15 +916,15 @@ def caption_row(text, following_texts, method):
 
 def rows_by_format(lines, columns):
     """Every student row on one page, read through the column bands."""
-    texts = [line.text for line in lines]
     rows = []
     for i, line in enumerate(lines):
         if (is_report_furniture(line.text)
                 and not SSN_RE.search(line.text)
-                and not ACADEMIC_RE.search(line.text)):
+                and not STUDENT_CAPTION_RE.search(line.text)):
             continue
-        row = (format_row(line, columns, texts[i + 1:])
-               or caption_row(line.text, texts[i + 1:], "format"))
+        following = lines[i + 1:]
+        row = (format_row(line, columns, following)
+               or caption_row(line.text, [l.text for l in following], "format"))
         if row:
             rows.append(row)
     return rows
@@ -782,9 +937,9 @@ def text_row(text, following_texts):
     """One student row from a flat line of text, by pattern alone.
 
     The SSN is the anchor because it is the only field on the line whose
-    shape is unmistakable: the ID is whatever token sits to its left, and
-    the name is what follows, up to the point where the report's own
-    captions begin.
+    shape is unmistakable. Which side of it the ID and the name sit on is
+    left to cut_fields, so this reader handles both report layouts without
+    being told which one it is looking at.
     """
     match = SSN_RE.search(text)
     if not match:
@@ -792,24 +947,10 @@ def text_row(text, following_texts):
 
     notes = []
     ssn = match.group(0)
-    if "-" not in ssn:
-        notes.append("SSN printed without separators -- copied exactly as printed")
-    elif re.search(r"[X*#?]", ssn):
-        notes.append("SSN is partly masked in the source PDF")
+    note_ssn_shape(ssn, notes)
 
-    before = text[:match.start()].split()
-    student_id = ""
-    if before:
-        student_id = before[-1]
-        if len(before) > 1:
-            notes.append("more than one value left of the SSN -- took the one "
-                         "nearest the SSN as the ID")
-        if not ID_TOKEN_RE.match(student_id):
-            notes.append("the value left of the SSN is not ID-shaped -- "
-                         "copied exactly as printed; verify it")
-
-    name_tokens, same_line = split_name_and_address(text[match.end():].split())
-    name = clean_name(name_tokens, notes)
+    student_id, name, same_line = cut_fields(
+        text[:match.start()].split(), text[match.end():].split(), notes)
 
     address, address_source = "", ""
     if same_line:
@@ -836,80 +977,145 @@ def rows_by_text(flat_lines):
 # ===========================================================================
 # putting the two halves together
 # ===========================================================================
-def fill_gaps_from_text(rows, flat_lines):
-    """Fill fields the format half left empty, using the text half.
+def row_quality(rows):
+    """How good a set of rows is, for choosing between two readings.
 
-    This is the field-level fallback, and it is what "if it does not come
-    out by format, take it by text" means row by row rather than page by
-    page. A format row with a blank ID is repaired from the pattern parse
-    of the same printed line instead of shipping blank.
+    Row COUNT alone is the wrong measure, and choosing on it is how a page
+    ends up with six students named "H". A reading that finds six students
+    with an ID and a name beats one that finds six SSNs with neither, so
+    completed students are counted first and the raw count only breaks ties.
+
+    The last term is total name length, and it settles the case where two
+    readings find the same students but one of them lost a word. Where an
+    engine's own text splits a printed line, the leading token goes missing
+    -- "Mrs. Jane D. Smith" comes back as "Jane D. Smith" -- and every count
+    above still ties. More surviving name text is the only thing that
+    separates them, and since trim_name has already thrown out the report's
+    furniture, more text here means more of the person's actual name.
     """
-    if not rows or not flat_lines:
-        return rows
+    complete = sum(1 for r in rows if r["Student ID"] and r["Name"])
+    return (complete,
+            sum(1 for r in rows if r["Address"]),
+            len(rows),
+            sum(len(r["Name"]) for r in rows))
 
-    # Match on the SSN: it is unique per student and both halves read it the
-    # same way, so it joins the two parses without depending on line numbers
-    # agreeing between the geometry and the flat text.
-    by_ssn = {}
-    for text in flat_lines:
-        parsed = text_row(text, [])
-        if parsed and parsed["SSN"]:
-            by_ssn.setdefault(parsed["SSN"], parsed)
 
-    for row in rows:
-        other = by_ssn.get(row["SSN"])
-        if not other:
+def merge_rows(primary, secondary, label):
+    """Fill blanks in `primary` from `secondary`, matching on SSN then ID.
+
+    This is the field-level fallback: whichever reader produced a row, a
+    field it left empty is taken from the other one rather than shipping
+    blank. Matching on the SSN joins the two without depending on line
+    numbers agreeing between the geometry and the flat text; the ID is the
+    fallback key, for the rows where no SSN was printed at all.
+
+    Only blanks are filled. A field both readers answered keeps the primary
+    reader's value, so the result stays explainable -- one reader per row,
+    named in the Method column, plus whatever it had to borrow.
+    """
+    other = "format" if label == "text" else "text"
+    index = {}
+    for row in secondary:
+        for key in (row["SSN"], row["Student ID"]):
+            if key:
+                index.setdefault(key, row)
+
+    for row in primary:
+        donor = index.get(row["SSN"]) or index.get(row["Student ID"])
+        if not donor:
             continue
-        repaired = []
-        for field in ("Student ID", "Name", "Address"):
-            if not row[field] and other[field]:
-                row[field] = other[field]
+        filled = []
+        for field in ("Student ID", "SSN", "Name", "Address"):
+            if not row[field] and donor[field]:
+                row[field] = donor[field]
                 if field == "Address":
-                    row["Address Source"] = other["Address Source"]
-                repaired.append(field)
-        if repaired:
-            row["Method"] = "format+text"
-            note = ("taken from the plain text because the column bands gave "
-                    "nothing for: " + ", ".join(repaired))
+                    row["Address Source"] = donor["Address Source"]
+                filled.append(field)
+        if filled:
+            row["Method"] = f"{label}+{other}"
+            note = (f"taken from the {other} reader, which the {label} reader "
+                    f"left empty: " + ", ".join(filled))
             row["Extraction Notes"] = (
-                f"{row['Extraction Notes']}; {note}" if row["Extraction Notes"] else note)
-    return rows
+                f"{row['Extraction Notes']}; {note}" if row["Extraction Notes"]
+                else note)
+            # A borrowed field is no longer missing.
+            row["Extraction Notes"] = row["Extraction Notes"].replace(
+                "no address found on or under the student line; ", "")
+
+        # One exception to "blanks only". When both readers found an address
+        # and they disagree, the column reader wins: it knows WHERE the
+        # address column is, while the text reader has to infer from what an
+        # address looks like. On a combined "Name/Address" column the flat
+        # text can hand back an address line fused with whatever was printed
+        # across from it -- still address-shaped, still wrong.
+        if (donor["Address"] and "column" in donor["Address Source"]
+                and "column" not in row["Address Source"]
+                and donor["Address"] != row["Address"]):
+            row["Address"] = donor["Address"]
+            row["Address Source"] = donor["Address Source"]
+            note = ("address taken from the measured column rather than the "
+                    "plain text, which read it differently")
+            row["Extraction Notes"] = (
+                f"{row['Extraction Notes']}; {note}" if row["Extraction Notes"]
+                else note)
+    return primary
 
 
 def rows_for_page(lines, flat_lines):
-    """(rows, method_used) for one page.
+    """(rows, reader_used) for one page.
 
-    format first, text as the fallback -- and "fallback" is decided by the
-    result, not by trusting the first path. If the geometry produced fewer
-    students than the flat text did, the flat text wins: fewer rows means
-    students missing, which is the failure this job cannot ship.
+    THE TEXT READER GOES FIRST, and then the data is arranged.
+
+    The reason is that the text reader needs nothing from the page except its
+    characters. It has no heading row to find and no column bands to measure,
+    so it works on every file, including the ones where the geometry cannot
+    get started. Putting it first means the worst case for any page is the
+    reader that always runs, rather than the reader that sometimes cannot.
+
+    The geometry runs second, and it earns its place on the pages where the
+    flat text genuinely cannot separate the fields: under a combined
+    "Name/Address" heading the address is told apart from the columns printed
+    across from it only by WHERE IT SITS.
+
+    Neither reader is trusted over the other on principle -- the result
+    decides. Whichever found more students wins and the other fills its
+    blanks, because fewer rows means students missing, and that is the one
+    failure this job cannot ship.
     """
-    columns = find_columns(lines)
-
-    if columns is not None:
-        rows = rows_by_format(lines, columns)
-        if rows:
-            text_rows = rows_by_text(flat_lines)
-            if len(text_rows) > len(rows):
-                for row in text_rows:
-                    note = (f"read from the plain text, which found "
-                            f"{len(text_rows)} students against {len(rows)} "
-                            f"from the columns")
-                    row["Extraction Notes"] = (
-                        f"{row['Extraction Notes']}; {note}"
-                        if row["Extraction Notes"] else note)
-                return text_rows, "text"
-            return fill_gaps_from_text(rows, flat_lines), "format"
-
-    rows = rows_by_text(flat_lines)
-    if not rows and lines:
-        # No heading row AND no flat text worth reading. The positioned words
-        # are all that is left, so run the pattern parse over the rebuilt
-        # lines rather than giving up on the page.
-        rows = rows_by_text([line.text for line in lines])
-        for row in rows:
+    # The text reader gets TWO text sources, because "the plain text of the
+    # page" is not one thing. Asked for a page's text, pdfplumber returns one
+    # string per printed line, while PyMuPDF returns it block by block -- and
+    # on a columnar report that puts a student's ID, name and SSN on three
+    # separate output lines. The reader then finds an SSN with nothing beside
+    # it and reads the status code as the name.
+    #
+    # So both arrangements are read and the better one is kept: the engine's
+    # own text, and lines rebuilt from the word coordinates. Whichever yields
+    # more complete students wins, which makes the text reader independent of
+    # how a particular engine chose to serialise the page.
+    candidates = [rows_by_text(flat_lines)]
+    if lines:
+        rebuilt = rows_by_text([line.text for line in lines])
+        for row in rebuilt:
             row["Method"] = "text (rebuilt lines)"
-    return rows, "text"
+        candidates.append(rebuilt)
+    text_rows = max(candidates, key=row_quality)
+
+    columns = find_columns(lines)
+    format_rows = rows_by_format(lines, columns) if columns is not None else []
+
+    if row_quality(format_rows) > row_quality(text_rows):
+        note = (f"read from the column layout, which read {len(format_rows)} "
+                f"students against {len(text_rows)} from the plain text")
+        for row in format_rows:
+            row["Extraction Notes"] = (
+                f"{row['Extraction Notes']}; {note}" if row["Extraction Notes"]
+                else note)
+        return merge_rows(format_rows, text_rows, "format"), "format"
+
+    if text_rows:
+        return merge_rows(text_rows, format_rows, "text"), "text"
+    return format_rows, "format" if format_rows else "text"
 
 
 # ===========================================================================
@@ -1238,7 +1444,8 @@ def qa_file(path: Path, engine: str = DEFAULT_ENGINE, limit: int = 25) -> None:
 def selftest() -> None:
     """Parse the synthetic test PDFs and print results. No real PII."""
     tests = Path(__file__).parent / "tests"
-    pdfs = sorted(tests.glob("sample_sap*.pdf"))
+    pdfs = sorted(list(tests.glob("sample_sap*.pdf"))
+                  + list(tests.glob("sample_nsc*.pdf")))
     if not pdfs:
         print(f"no test PDFs in {tests}")
         return
@@ -1310,7 +1517,11 @@ def run_headless(src: Path, dst: Path, engine="auto", workers=None) -> None:
     print(f"\n{s['rows']} students from {len(pdfs)} files ({s['pages']} pages) "
           f"in {elapsed:.1f}s"
           + (f"  --  {s['pages'] / elapsed:.0f} pages/sec" if elapsed else ""))
-    print(f"read by columns: {s['by_format']}    by plain text: {s['by_text']}")
+    # The text reader runs first, so it normally reads everything and a zero
+    # here is the expected result, not a problem. A non-zero count means the
+    # column layout found students the plain text could not.
+    print(f"read by the text reader: {s['by_text']}    "
+          f"by the column layout: {s['by_format']}")
     print(f"with an address: {s['with_address']} of {s['rows']}")
     if s["no_columns"]:
         print(f"{s['no_columns']} page(s) had no heading row -- run --columns "
@@ -1401,8 +1612,8 @@ class App:
                  fg="#555").pack(side="left")
 
         tk.Label(self.root, anchor="w", fg="#555", justify="left",
-                 text="Columns are read first; the plain text is the fallback. "
-                      "Each row records which one produced it."
+                 text="The plain text is read first, then the column layout "
+                      "arranges what it could not separate."
                  ).pack(fill="x", padx=10)
 
         tk.Label(
@@ -1486,8 +1697,8 @@ class App:
             msg = (f"{s['rows']} students from {len(pdfs)} PDFs "
                    f"({s['pages']} pages) in {mins:.1f} min.\n\n"
                    f"Saved to:\n{out}\n\n"
-                   f"Read by columns: {s['by_format']}    "
-                   f"by plain text: {s['by_text']}\n"
+                   f"Read by the text reader: {s['by_text']}    "
+                   f"by the column layout: {s['by_format']}\n"
                    f"With an address: {s['with_address']} of {s['rows']}\n\n")
 
             # Lead with completeness. A row count on its own reads as success
