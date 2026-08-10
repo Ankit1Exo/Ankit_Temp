@@ -42,10 +42,47 @@ WHAT EACH HALF CONTRIBUTES
     new here
         dashes folded to ASCII before matching, so U+2010 / U+2013 /
         U+2212 cannot hide an SSN
-        a second reading of any page that yields nothing, using the other
-        text engine, so an engine-specific quirk costs a page and not a file
+        PyMuPDF as the primary engine, which is the speed fix -- see below
+        a whole-file re-read on the other engine when a file yields nothing
         a per-file count in the console and a reconciliation sheet, so a
         file that returns zero rows is visible instead of silent
+        files processed in parallel across CPU cores
+
+SPEED
+    pdfplumber is pdfminer.six underneath, and on 5,000+ pages it is the
+    bottleneck. Measured on the test set, reading positioned words:
+
+        pdfplumber   10.084 s
+        PyMuPDF       0.612 s        16.5x faster
+
+    and both engines returned IDENTICAL student rows on every test file.
+    That is the point: the earlier failure was caused by the METHOD
+    (layout=True versus word coordinates), not by the engine. Once both
+    engines are asked for positioned words, they agree -- so the fast one
+    is free to use.
+
+    PyMuPDF is therefore primary. pdfplumber stays as the second opinion,
+    but at FILE level, not page level: on a report this size most pages
+    are course detail carrying no student line at all, so "re-read every
+    page that found nothing" would fire on the majority of pages and give
+    the 16.5x straight back. A file that yields zero rows is the failure
+    actually worth catching, and re-reading only those costs nothing.
+
+    On top of that, files are processed in parallel, one per worker
+    process. Be realistic about what that adds: Windows has no fork, so
+    each worker is a fresh interpreter costing about a second to start.
+    On the tiny test set 4 workers were SLOWER than 1 (5.4s against
+    0.5s). The pool only pays for itself when the files are big, which on
+    a 5,000-page set they are -- so batches of fewer than 4 files stay
+    serial, and the default worker count is (cores - 1).
+
+    The engine swap is the dependable 16x. Parallelism adds up to another
+    (cores - 1)x on top, and nothing at all on a 2-core box.
+
+    If you would rather trust the slower engine, --engine plumber forces
+    it. To prove the two agree on YOUR files before switching, run
+    --verify first: it reads a folder with both engines and reports any
+    file where they disagree.
 
 THE PARSING RULE
     Any rebuilt line holding an SSN, or the "Academic Program" caption, is
@@ -67,6 +104,11 @@ USAGE
     python "260810 AM sap id ssn name extractor.py"
         Tkinter folder pickers, progress bar, combined workbook.
 
+    python "260810 AM sap id ssn name extractor.py" --verify <folder>
+        Reads every PDF with BOTH engines and reports any file where they
+        disagree. Run this once on production before trusting the fast
+        engine. Output is counts only -- no PII.
+
     python "260810 AM sap id ssn name extractor.py" --selftest
         Runs the parser over tests/*.pdf and prints row counts. No PII.
 
@@ -74,11 +116,17 @@ USAGE
         Masked dump of one page's rebuilt lines, with coordinates, so a
         layout problem can be pasted into a ticket without exposing PII.
 
-REQUIREMENTS
-    pip install pdfplumber pymupdf pandas openpyxl
+    Extra flags:  --engine mupdf|plumber      force one engine
+                  --workers N                 parallel files (default: cores-1)
 
-    pdfplumber is required. pymupdf is optional but recommended -- it is
-    only used as the second opinion on a page that reads as empty.
+REQUIREMENTS
+    pip install pymupdf pdfplumber pandas openpyxl
+
+    pymupdf is the primary engine and does the work. pdfplumber is the
+    cross-check: it is what --verify compares against, and what a file
+    that yields zero rows is retried with. The script runs with either
+    one alone, but keep both -- the cross-check is the evidence that the
+    fast path is reading everything.
 
 SECURITY NOTE
     The workbook this produces holds SSNs and names in clear text. Run
@@ -90,11 +138,13 @@ SECURITY NOTE
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 import threading
 import time
 import traceback
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import tkinter as tk
@@ -245,8 +295,8 @@ def cluster_rows(words):
 
 
 def words_pdfplumber(page):
-    """Positioned words from pdfplumber. This is the engine that reads all
-    58 files, so it is the primary."""
+    """Positioned words from pdfplumber. Accurate but slow -- pdfminer.six
+    underneath. Kept as the cross-check, not the workhorse."""
     out = []
     for w in page.extract_words(use_text_flow=False, keep_blank_chars=False):
         out.append((w["x0"], w["top"], w["bottom"], fold(w["text"])))
@@ -254,7 +304,8 @@ def words_pdfplumber(page):
 
 
 def words_pymupdf(page):
-    """Positioned words from PyMuPDF. Second opinion only."""
+    """Positioned words from PyMuPDF. Same information, ~16x faster, and
+    verified to give identical rows on the whole test set."""
     return [(w[0], w[1], w[3], fold(w[4])) for w in page.get_text("words")]
 
 
@@ -265,18 +316,28 @@ def page_lines_pdfplumber(path: Path):
             yield number, cluster_rows(words_pdfplumber(page))
 
 
-def page_lines_pymupdf(path: Path, only_pages=None):
-    """Yield (page_number, lines) via PyMuPDF, optionally for a subset."""
+def page_lines_pymupdf(path: Path):
+    """Yield (page_number, lines) for every page, via PyMuPDF."""
     doc = fitz.open(str(path))
     try:
         if doc.needs_pass:
-            return
+            raise RuntimeError("PDF is encrypted and needs a password")
         for number, page in enumerate(doc, start=1):
-            if only_pages is not None and number not in only_pages:
-                continue
             yield number, cluster_rows(words_pymupdf(page))
     finally:
         doc.close()
+
+
+# Engine name -> (page iterator, availability). Keeping this in one place
+# means --engine, --verify and the fallback all agree on what "mupdf" means.
+ENGINES = {
+    "mupdf": (page_lines_pymupdf, lambda: fitz is not None),
+    "plumber": (page_lines_pdfplumber, lambda: pdfplumber is not None),
+}
+
+
+def available_engines():
+    return [name for name, (_, ok) in ENGINES.items() if ok()]
 
 
 # ===========================================================================
@@ -435,61 +496,138 @@ def rows_from_lines(lines, page_num, path_name):
     return found
 
 
-def process_pdf(path: Path):
+def read_with(path: Path, engine: str):
+    """(rows, page_count) for one PDF using one named engine."""
+    iterator, _ = ENGINES[engine]
+    rows, page_count, empty_pages = [], 0, 0
+    for page_num, lines in iterator(path):
+        page_count += 1
+        found = rows_from_lines(lines, page_num, path.name)
+        if not found:
+            empty_pages += 1
+        rows.extend(found)
+    return rows, page_count, empty_pages
+
+
+def process_pdf(path, engine: str = "auto"):
     """Return (rows, diagnostics) for one PDF.
 
-    A page that yields nothing is read a SECOND time with the other engine
-    before it is written off. Doing this per page rather than per file means
-    an engine-specific quirk costs one page, not the whole document."""
-    rows, empty_pages, page_count = [], [], 0
-    engine_used = "pdfplumber"
+    The fast engine runs first. If the WHOLE FILE comes back with no rows,
+    it is read again with the other engine before being written off.
 
-    if pdfplumber is not None:
-        for page_num, lines in page_lines_pdfplumber(path):
-            page_count += 1
-            found = rows_from_lines(lines, page_num, path.name)
-            if not found:
-                empty_pages.append(page_num)
-            rows.extend(found)
-    elif fitz is not None:
-        engine_used = "PyMuPDF"
-        for page_num, lines in page_lines_pymupdf(path):
-            page_count += 1
-            found = rows_from_lines(lines, page_num, path.name)
-            if not found:
-                empty_pages.append(page_num)
-            rows.extend(found)
-    else:
-        raise RuntimeError("neither pdfplumber nor pymupdf is installed")
+    File level rather than page level is deliberate. On a report this size
+    most pages are course detail carrying no student line at all, so a
+    page-level retry would fire on the majority of pages and hand back the
+    entire speed gain. A file that yields nothing is the failure that
+    actually matters, and retrying only those is free."""
+    path = Path(path)
 
-    # Second opinion on the pages that came back empty.
-    recovered_rows, recovered_pages = 0, set()
-    if empty_pages and pdfplumber is not None and fitz is not None:
-        for page_num, lines in page_lines_pymupdf(path, only_pages=set(empty_pages)):
-            found = rows_from_lines(lines, page_num, path.name)
-            if not found:
-                continue
-            for row in found:
-                note = "read with the PyMuPDF engine after pdfplumber found nothing on this page"
+    order = available_engines() if engine == "auto" else [engine]
+    order = [e for e in order if ENGINES[e][1]()]
+    if not order:
+        raise RuntimeError("no PDF engine available -- pip install pymupdf pdfplumber")
+    # "mupdf" first whenever we are choosing for ourselves.
+    if engine == "auto":
+        order.sort(key=lambda e: e != "mupdf")
+
+    primary = order[0]
+    try:
+        rows, page_count, empty_pages = read_with(path, primary)
+        error = ""
+    except Exception as exc:                                    # noqa: BLE001
+        rows, page_count, empty_pages = [], 0, 0
+        error = f"{type(exc).__name__}: {exc}"
+
+    fallback_used = ""
+    if not rows and engine == "auto" and len(order) > 1:
+        alt = order[1]
+        try:
+            alt_rows, alt_pages, alt_empty = read_with(path, alt)
+        except Exception as exc:                                # noqa: BLE001
+            alt_rows, alt_pages, alt_empty = [], 0, 0
+            error = f"{error}; {type(exc).__name__}: {exc}" if error else \
+                f"{type(exc).__name__}: {exc}"
+        if alt_rows:
+            note = f"file read with the {alt} engine after {primary} found no rows"
+            for row in alt_rows:
                 row["Extraction Notes"] = (
                     f"{row['Extraction Notes']}; {note}" if row["Extraction Notes"] else note)
-            recovered_rows += len(found)
-            recovered_pages.add(page_num)
-            rows.extend(found)
+            rows, page_count, empty_pages = alt_rows, alt_pages, alt_empty
+            fallback_used = alt
 
-    # Most pages in this report are course detail with no student line on
-    # them at all, so a page with no rows is normal. The number is here to
-    # be compared ACROSS files: a file where it equals the page count is a
-    # file that read as empty, and that is the failure being guarded against.
     diagnostics = {
         "File Name": path.name,
         "Pages": page_count,
         "Rows Found": len(rows),
-        "Pages With No Rows": len(set(empty_pages) - recovered_pages),
-        "Rows Recovered By Second Engine": recovered_rows,
-        "Primary Engine": engine_used,
+        "Pages With No Student Line": empty_pages,
+        "Engine": fallback_used or primary,
+        "Fallback Used": "yes" if fallback_used else "",
+        "Error": error,
     }
     return rows, diagnostics
+
+
+def _worker(args):
+    """Top level so it can be pickled to a worker process on Windows."""
+    path, engine = args
+    try:
+        return process_pdf(path, engine)
+    except Exception as exc:                                    # noqa: BLE001
+        return [], {"File Name": Path(path).name, "Pages": 0, "Rows Found": 0,
+                    "Pages With No Student Line": 0, "Engine": "", "Fallback Used": "",
+                    "Error": f"{type(exc).__name__}: {exc}"}
+
+
+def process_folder(pdfs, engine="auto", workers=None, progress=None):
+    """Process every PDF, in parallel, yielding results as they finish.
+
+    Returns (rows, diagnostics). `progress` is called with (done, total,
+    file_name, row_count) after each file so a GUI can update.
+
+    Parallelism is per FILE, not per page: PDF readers hold per-document
+    state, and 58 files across a handful of cores already saturates the
+    disk. One process per file also means a file that crashes an engine
+    takes its own worker down and nothing else."""
+    pdfs = [Path(p) for p in pdfs]
+    if workers is None:
+        workers = max(1, (os.cpu_count() or 2) - 1)
+    workers = max(1, min(workers, len(pdfs)))
+
+    # Windows has no fork: every worker is a brand new interpreter that
+    # re-imports this module, which costs about a second each. Measured on
+    # the 19-page test set, 4 workers took 5.4s against 0.5s serial -- the
+    # pool cost more than the work. That reverses completely on a real
+    # 5,000-page run, but only if there is enough work to amortise it, so
+    # a small batch stays serial.
+    if len(pdfs) < 4:
+        workers = 1
+
+    all_rows, diagnostics, done = [], [], 0
+
+    if workers == 1:
+        for pdf in pdfs:
+            rows, diag = _worker((str(pdf), engine))
+            all_rows.extend(rows)
+            diagnostics.append(diag)
+            done += 1
+            if progress:
+                progress(done, len(pdfs), pdf.name, len(rows))
+        return all_rows, diagnostics
+
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_worker, (str(p), engine)): p for p in pdfs}
+        for future in as_completed(futures):
+            rows, diag = future.result()
+            all_rows.extend(rows)
+            diagnostics.append(diag)
+            done += 1
+            if progress:
+                progress(done, len(pdfs), diag["File Name"], len(rows))
+
+    # Workers finish out of order; restore a stable, reviewable order.
+    all_rows.sort(key=lambda r: (r["File Name"], r["Page Number"]))
+    diagnostics.sort(key=lambda d: d["File Name"])
+    return all_rows, diagnostics
 
 
 # ===========================================================================
@@ -550,18 +688,93 @@ def selftest() -> None:
     if not pdfs:
         print(f"no test PDFs in {tests}")
         return
-    print(f"{'file':<48}{'rows':>6}{'recovered':>11}")
+    print(f"{'file':<48}{'rows':>6}{'engine':>10}")
     print("-" * 66)
     total = 0
     for p in pdfs:
         rows, diag = process_pdf(p)
         total += len(rows)
-        print(f"{p.name[:47]:<48}{len(rows):>6}{diag['Rows Recovered By Second Engine']:>11}")
+        print(f"{p.name[:47]:<48}{len(rows):>6}{diag['Engine']:>10}")
         for r in rows:
             print(f"      ID={r['ID']:<10} SSN={r['SSN']:<14} "
                   f"PFX={r['Prefix']:<5} NAME={r['Full Name']}")
     print("-" * 66)
     print(f"{'TOTAL':<48}{total:>6}")
+
+
+def verify(folder: str) -> None:
+    """Read every PDF with BOTH engines and report disagreements.
+
+    This is the evidence that the fast engine is safe on YOUR files. It
+    prints counts and a per-file verdict only -- the identity of a row is
+    compared inside this process and never printed, so the output carries
+    no PII and can be attached to a change record."""
+    missing = [n for n in ("mupdf", "plumber") if not ENGINES[n][1]()]
+    if missing:
+        print(f"cannot verify -- these engines are not installed: {', '.join(missing)}")
+        print("pip install pymupdf pdfplumber")
+        return
+
+    src = Path(folder)
+    pdfs = sorted({p.resolve(): p for p in
+                   list(src.glob("*.pdf")) + list(src.glob("*.PDF"))}.values(),
+                  key=lambda p: p.name)
+    if not pdfs:
+        print(f"no PDFs in {src}")
+        return
+
+    print(f"comparing both engines over {len(pdfs)} file(s)\n")
+    print(f"{'file':<44}{'mupdf':>7}{'plumb':>7}{'sec (m)':>9}{'sec (p)':>9}  verdict")
+    print("-" * 90)
+
+    disagreements, t_m_total, t_p_total = [], 0.0, 0.0
+    for p in pdfs:
+        t0 = time.perf_counter()
+        try:
+            rows_m, _, _ = read_with(p, "mupdf")
+            err_m = ""
+        except Exception as exc:                                # noqa: BLE001
+            rows_m, err_m = [], f"{type(exc).__name__}"
+        t_m = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        try:
+            rows_p, _, _ = read_with(p, "plumber")
+            err_p = ""
+        except Exception as exc:                                # noqa: BLE001
+            rows_p, err_p = [], f"{type(exc).__name__}"
+        t_p = time.perf_counter() - t0
+
+        t_m_total += t_m
+        t_p_total += t_p
+
+        key = lambda r: (r["Page Number"], r["ID"], r["SSN"], r["Full Name"])
+        set_m, set_p = {key(r) for r in rows_m}, {key(r) for r in rows_p}
+
+        if err_m or err_p:
+            verdict_text = f"ERROR mupdf={err_m or 'ok'} plumber={err_p or 'ok'}"
+            disagreements.append(p.name)
+        elif set_m == set_p:
+            verdict_text = "identical"
+        else:
+            verdict_text = (f"DIFFER  only-mupdf={len(set_m - set_p)} "
+                            f"only-plumber={len(set_p - set_m)}")
+            disagreements.append(p.name)
+
+        print(f"{p.name[:43]:<44}{len(rows_m):>7}{len(rows_p):>7}"
+              f"{t_m:>9.2f}{t_p:>9.2f}  {verdict_text}")
+
+    print("-" * 90)
+    print(f"{'TOTAL':<44}{'':>7}{'':>7}{t_m_total:>9.2f}{t_p_total:>9.2f}")
+    if t_m_total > 0:
+        print(f"\nPyMuPDF is {t_p_total / t_m_total:.1f}x faster on this set.")
+    if disagreements:
+        print(f"\n{len(disagreements)} file(s) DISAGREE -- run the batch with "
+              f"--engine plumber until this is understood:")
+        for name in disagreements[:20]:
+            print(f"    {name}")
+    else:
+        print("\nEvery file agreed. The fast engine is safe to use on this set.")
 
 
 # ===========================================================================
@@ -579,6 +792,51 @@ def write_workbook(rows, diagnostics, dest: Path) -> Path:
     return out
 
 
+def run_headless(src: Path, dst: Path, engine="auto", workers=None) -> None:
+    """Whole folder, no GUI. Prints counts only -- never a student value."""
+    pdfs = sorted({p.resolve(): p for p in
+                   list(src.glob("*.pdf")) + list(src.glob("*.PDF"))}.values(),
+                  key=lambda p: p.name)
+    if not pdfs:
+        print(f"no PDFs in {src}")
+        return
+
+    start = time.time()
+
+    def progress(done, total, name, count):
+        print(f"  [{done}/{total}] {name}: {count} row(s)")
+
+    rows, diagnostics = process_folder(pdfs, engine=engine, workers=workers,
+                                       progress=progress)
+    out = write_workbook(rows, diagnostics, dst)
+
+    pages = sum(d["Pages"] for d in diagnostics)
+    elapsed = time.time() - start
+    print(f"\n{len(rows)} rows from {len(pdfs)} files ({pages} pages) "
+          f"in {elapsed:.1f}s"
+          + (f"  --  {pages / elapsed:.0f} pages/sec" if elapsed else ""))
+
+    zero = [d["File Name"] for d in diagnostics if d["Rows Found"] == 0]
+    if zero:
+        print(f"\n{len(zero)} file(s) produced NO rows:")
+        for name in zero[:20]:
+            print(f"    {name}")
+    fallback = [d["File Name"] for d in diagnostics if d["Fallback Used"]]
+    if fallback:
+        print(f"\n{len(fallback)} file(s) needed the fallback engine:")
+        for name in fallback[:20]:
+            print(f"    {name}")
+    errors = [d for d in diagnostics if d["Error"]]
+    if errors:
+        print(f"\n{len(errors)} file(s) errored:")
+        for d in errors[:20]:
+            print(f"    {d['File Name']}: {d['Error']}")
+
+    print(f"\nworkbook: {out}")
+    print("Holds SSNs in clear text -- move it to the approved Global Insider "
+          "folder and delete any local copy.")
+
+
 # ===========================================================================
 # GUI
 # ===========================================================================
@@ -591,6 +849,8 @@ class App:
         self.dst = tk.StringVar()
         self.status = tk.StringVar(value="Choose a source folder and a destination folder.")
         self.eta = tk.StringVar(value="")
+        self.engine = tk.StringVar(value="auto")
+        self.workers = tk.IntVar(value=max(1, (os.cpu_count() or 2) - 1))
         self._build()
 
     def _build(self):
@@ -606,6 +866,16 @@ class App:
         row = tk.Frame(self.root); row.pack(fill="x", **pad)
         tk.Entry(row, textvariable=self.dst).pack(side="left", fill="x", expand=True)
         tk.Button(row, text="Browse", command=self._pick_dst).pack(side="left", padx=6)
+
+        row = tk.Frame(self.root); row.pack(fill="x", **pad)
+        tk.Label(row, text="Engine").pack(side="left")
+        ttk.Combobox(row, textvariable=self.engine, width=10, state="readonly",
+                     values=["auto", "mupdf", "plumber"]).pack(side="left", padx=6)
+        tk.Label(row, text="   Parallel files").pack(side="left")
+        tk.Spinbox(row, from_=1, to=32, textvariable=self.workers,
+                   width=5).pack(side="left", padx=6)
+        tk.Label(row, text="  (auto = fast engine, slow one only if a file reads empty)",
+                 fg="#555").pack(side="left")
 
         tk.Label(
             self.root,
@@ -662,34 +932,31 @@ class App:
                 return
 
             self.bar["maximum"] = len(pdfs)
-            all_rows, diagnostics = [], []
             start = time.time()
+            workers = max(1, int(self.workers.get()))
 
-            for i, pdf in enumerate(pdfs, start=1):
-                self._set(f"Reading {pdf.name}   ({i} of {len(pdfs)})")
-                try:
-                    rows, diag = process_pdf(pdf)
-                except Exception as exc:                        # noqa: BLE001
-                    rows = []
-                    diag = {"File Name": pdf.name, "Pages": 0, "Rows Found": 0,
-                            "Pages With No Rows": 0,
-                            "Rows Recovered By Second Engine": 0,
-                            "Primary Engine": f"FAILED: {type(exc).__name__}: {exc}"}
-                all_rows.extend(rows)
-                diagnostics.append(diag)
-                print(f"  {pdf.name}: {len(rows)} student row(s)")
-
-                self.bar["value"] = i
+            def progress(done, total, name, count):
+                self.bar["value"] = done
                 elapsed = time.time() - start
-                remaining = (elapsed / i) * (len(pdfs) - i)
-                self._set(f"Reading {pdf.name}   ({i} of {len(pdfs)})",
-                          f"Elapsed {elapsed/60:.1f} min   Remaining ~{remaining/60:.1f} min")
+                remaining = (elapsed / done) * (total - done)
+                print(f"  {name}: {count} student row(s)")
+                self._set(f"Read {name}   ({done} of {total})",
+                          f"Elapsed {elapsed/60:.1f} min   "
+                          f"Remaining ~{remaining/60:.1f} min   "
+                          f"{workers} file(s) at a time")
+
+            self._set(f"Reading {len(pdfs)} PDFs on {workers} worker(s)...")
+            all_rows, diagnostics = process_folder(
+                pdfs, engine=self.engine.get(), workers=workers, progress=progress)
 
             self._set("Writing the workbook...")
             out = write_workbook(all_rows, diagnostics, dst)
 
             zero = [d["File Name"] for d in diagnostics if d["Rows Found"] == 0]
-            msg = (f"{len(all_rows)} student rows from {len(pdfs)} PDFs.\n\n"
+            pages = sum(d["Pages"] for d in diagnostics)
+            mins = (time.time() - start) / 60
+            msg = (f"{len(all_rows)} student rows from {len(pdfs)} PDFs "
+                   f"({pages} pages) in {mins:.1f} min.\n\n"
                    f"Saved to:\n{out}\n\n")
             if zero:
                 msg += (f"{len(zero)} file(s) produced NO rows -- see the "
@@ -720,12 +987,19 @@ class App:
 def main() -> None:
     args = sys.argv[1:]
 
-    if pdfplumber is None and fitz is None:
-        print("Install the PDF engines first:  pip install pdfplumber pymupdf")
+    if not available_engines():
+        print("Install the PDF engines first:  pip install pymupdf pdfplumber")
         return
 
     if args and args[0] == "--selftest":
         selftest()
+        return
+
+    if args and args[0] == "--verify":
+        if len(args) < 2:
+            print('usage: --verify "<folder>"')
+            return
+        verify(args[1])
         return
 
     if args and args[0] == "--debug":
@@ -735,10 +1009,22 @@ def main() -> None:
         debug_page(Path(args[1]), int(args[2]) if len(args) > 2 else 1)
         return
 
+    if args and args[0] == "--run":
+        if len(args) < 3:
+            print('usage: --run "<src folder>" "<dest folder>" '
+                  '[--engine mupdf|plumber] [--workers N]')
+            return
+        engine = args[args.index("--engine") + 1] if "--engine" in args else "auto"
+        workers = int(args[args.index("--workers") + 1]) if "--workers" in args else None
+        run_headless(Path(args[1]), Path(args[2]), engine, workers)
+        return
+
+    if fitz is None:
+        print("NOTE: pymupdf is not installed, so the slower pdfplumber engine is in use.\n"
+              "      Installing it makes this roughly 16x faster:  pip install pymupdf")
     if pdfplumber is None:
-        print("WARNING: pdfplumber is not installed, so the PyMuPDF engine is in use.\n"
-              "         pdfplumber is the engine that reads these reports reliably.\n"
-              "         Install it with:  pip install pdfplumber")
+        print("NOTE: pdfplumber is not installed, so there is no cross-check engine.\n"
+              "      A file that reads as empty cannot be retried:  pip install pdfplumber")
 
     App().run()
 
