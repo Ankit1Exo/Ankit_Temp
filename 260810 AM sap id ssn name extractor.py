@@ -42,47 +42,56 @@ WHAT EACH HALF CONTRIBUTES
     new here
         dashes folded to ASCII before matching, so U+2010 / U+2013 /
         U+2212 cannot hide an SSN
-        PyMuPDF as the primary engine, which is the speed fix -- see below
-        a whole-file re-read on the other engine when a file yields nothing
-        a per-file count in the console and a reconciliation sheet, so a
-        file that returns zero rows is visible instead of silent
-        files processed in parallel across CPU cores
+        a completeness count: SSN tokens present on the page against rows
+        produced, so students lost in parsing are reported, not discovered
+        by eye against the PDF weeks later
+        files processed in parallel, which is where the speed comes from
+        a masked --qa dump showing how each line was split into fields
 
-SPEED
-    pdfplumber is pdfminer.six underneath, and on 5,000+ pages it is the
-    bottleneck. Measured on the test set, reading positioned words:
+ENGINE CHOICE, AND WHY IT IS NOT THE FAST ONE
+    pdfplumber is pdfminer.six underneath and it is slow. PyMuPDF reads
+    the same positioned words about 16x faster (measured: 10.084s against
+    0.612s on the test set) and agreed with pdfplumber on every synthetic
+    test file.
 
-        pdfplumber   10.084 s
-        PyMuPDF       0.612 s        16.5x faster
+    It is still not the default, and the reason is worth stating plainly.
+    Agreement on synthetic test files is not evidence about production
+    data. When PyMuPDF was made primary, production came back with
+    students MISSING -- and that is the worst failure this job can
+    produce, because a workbook with 40 of 47 students in it looks
+    completely healthy. Nothing about it says "incomplete". It got caught
+    by someone reading the PDF next to the workbook.
 
-    and both engines returned IDENTICAL student rows on every test file.
-    That is the point: the earlier failure was caused by the METHOD
-    (layout=True versus word coordinates), not by the engine. Once both
-    engines are asked for positioned words, they agree -- so the fast one
-    is free to use.
+    So: speed comes from parallelism, which cannot change WHAT is read,
+    and never from the engine, which can. pdfplumber -- the engine proven
+    against all 58 production files -- is the default.
 
-    PyMuPDF is therefore primary. pdfplumber stays as the second opinion,
-    but at FILE level, not page level: on a report this size most pages
-    are course detail carrying no student line at all, so "re-read every
-    page that found nothing" would fire on the majority of pages and give
-    the 16.5x straight back. A file that yields zero rows is the failure
-    actually worth catching, and re-reading only those costs nothing.
+    PyMuPDF remains available and is genuinely 16x faster. To use it
+    honestly, run --verify over your own files first. If every file
+    reports identical, that is real evidence, and --engine mupdf is then
+    a reasonable choice. Until then the known-correct engine wins.
 
-    On top of that, files are processed in parallel, one per worker
-    process. Be realistic about what that adds: Windows has no fork, so
-    each worker is a fresh interpreter costing about a second to start.
-    On the tiny test set 4 workers were SLOWER than 1 (5.4s against
-    0.5s). The pool only pays for itself when the files are big, which on
-    a 5,000-page set they are -- so batches of fewer than 4 files stay
-    serial, and the default worker count is (cores - 1).
+    Files are processed in parallel, one per worker process. Windows has
+    no fork, so each worker is a fresh interpreter costing about a second
+    to start: on the tiny test set 4 workers were SLOWER than 1 (5.4s
+    against 0.5s). That reverses on a 5,000-page run, so batches under 4
+    files stay serial and the default worker count is (cores - 1).
 
-    The engine swap is the dependable 16x. Parallelism adds up to another
-    (cores - 1)x on top, and nothing at all on a 2-core box.
+COMPLETENESS
+    Every student prints exactly one SSN. So the number of SSN-shaped
+    tokens on a page is how many students are there, regardless of whether
+    the parser managed to read them, and comparing that against the rows
+    produced turns "students are missing" from something you notice by eye
+    into something the script reports.
 
-    If you would rather trust the slower engine, --engine plumber forces
-    it. To prove the two agree on YOUR files before switching, run
-    --verify first: it reads a folder with both engines and reports any
-    file where they disagree.
+    The Reconciliation sheet carries SSNs On Page, Rows Found, Missing and
+    Complete for every file. Missing > 0 means students were lost between
+    the page and the workbook. When it happens the file is automatically
+    re-read with the other engine and the better result is kept.
+
+    Check that sheet before trusting a run. A green Missing column is the
+    difference between an extraction you can sign off and one you hope is
+    right.
 
 THE PARSING RULE
     Any rebuilt line holding an SSN, or the "Academic Program" caption, is
@@ -112,21 +121,29 @@ USAGE
     python "260810 AM sap id ssn name extractor.py" --selftest
         Runs the parser over tests/*.pdf and prints row counts. No PII.
 
-    python "260810 AM sap id ssn name extractor.py" --debug <pdf> [page]
-        Masked dump of one page's rebuilt lines, with coordinates, so a
-        layout problem can be pasted into a ticket without exposing PII.
+    python "260810 AM sap id ssn name extractor.py" --qa <pdf> [--limit N]
+        Masked, field-by-field dump of every student row in one file: the
+        source line next to the parsed ID / SSN / Name. This is the one to
+        run when the workbook holds the wrong values. No PII.
 
-    Extra flags:  --engine mupdf|plumber      force one engine
-                  --workers N                 parallel files (default: cores-1)
+    python "260810 AM sap id ssn name extractor.py" --debug <pdf> [page]
+        Masked dump of one page's rebuilt lines plus how each was split,
+        so a layout problem can be pasted into a ticket without PII.
+
+    python "260810 AM sap id ssn name extractor.py" --run <src> <dst>
+        Headless, no GUI. Schedulable.
+
+    Extra flags:  --engine plumber|mupdf      force one engine
+                  --workers N                parallel files (default: cores-1)
 
 REQUIREMENTS
-    pip install pymupdf pdfplumber pandas openpyxl
+    pip install pdfplumber pymupdf pandas openpyxl
 
-    pymupdf is the primary engine and does the work. pdfplumber is the
-    cross-check: it is what --verify compares against, and what a file
-    that yields zero rows is retried with. The script runs with either
-    one alone, but keep both -- the cross-check is the evidence that the
-    fast path is reading everything.
+    pdfplumber does the work -- it is the engine proven on all 58
+    production files. pymupdf is the cross-check: what --verify compares
+    against, and what an incomplete file is retried with. The script runs
+    with either alone, but keep both: the cross-check is what turns "the
+    fast engine is probably fine" into evidence.
 
 SECURITY NOTE
     The workbook this produces holds SSNs and names in clear text. Run
@@ -331,13 +348,31 @@ def page_lines_pymupdf(path: Path):
 # Engine name -> (page iterator, availability). Keeping this in one place
 # means --engine, --verify and the fallback all agree on what "mupdf" means.
 ENGINES = {
-    "mupdf": (page_lines_pymupdf, lambda: fitz is not None),
     "plumber": (page_lines_pdfplumber, lambda: pdfplumber is not None),
+    "mupdf": (page_lines_pymupdf, lambda: fitz is not None),
 }
+
+# pdfplumber is the DEFAULT, and it is the default for one reason: it is the
+# engine that has actually been shown to read every one of the 58 production
+# files. PyMuPDF is ~16x faster and agreed with it on every synthetic test
+# file, but a synthetic test file is not evidence about production data, and
+# when the two disagree on production the symptom is students silently
+# missing from the workbook -- which is the worst possible failure for this
+# job, because the output still looks plausible.
+#
+# So speed is taken from parallelism, which cannot change what is read, and
+# not from the engine, which can. Anyone who wants the 16x should first run
+# --verify over their own files; if it reports every file identical, that is
+# real evidence and --engine mupdf becomes a reasonable choice. Until then
+# the slow, known-correct engine wins.
+DEFAULT_ENGINE = "plumber"
+
+# Order the fallback tries after the primary.
+ENGINE_ORDER = ["plumber", "mupdf"]
 
 
 def available_engines():
-    return [name for name, (_, ok) in ENGINES.items() if ok()]
+    return [name for name in ENGINE_ORDER if ENGINES[name][1]()]
 
 
 # ===========================================================================
@@ -497,74 +532,122 @@ def rows_from_lines(lines, page_num, path_name):
 
 
 def read_with(path: Path, engine: str):
-    """(rows, page_count) for one PDF using one named engine."""
+    """(rows, page_count, empty_pages, ssn_seen) for one PDF, one engine.
+
+    `ssn_seen` is the completeness yardstick, and it is the whole point of
+    this function returning four things instead of two.
+
+    It counts SSN-shaped tokens in the page's words BEFORE any line
+    clustering or field parsing happens. Every student prints exactly one
+    SSN, so that count is how many students are on the page, independent
+    of whether the parser managed to read them. If it comes back higher
+    than the number of rows produced, students were LOST between the page
+    and the workbook -- which is a silent failure that otherwise has to be
+    caught by eye against the PDF.
+
+    Counting on the flat word list rather than on clustered lines is
+    deliberate: if line clustering is what broke (a student line split in
+    two, so the name ends up detached from the SSN), the clustered count
+    would be wrong in exactly the same way as the parse and the two would
+    agree on a lie. The flat count cannot be fooled by that."""
     iterator, _ = ENGINES[engine]
-    rows, page_count, empty_pages = [], 0, 0
+    rows, page_count, empty_pages, ssn_seen = [], 0, 0, 0
     for page_num, lines in iterator(path):
         page_count += 1
         found = rows_from_lines(lines, page_num, path.name)
         if not found:
             empty_pages += 1
         rows.extend(found)
-    return rows, page_count, empty_pages
+        ssn_seen += len(SSN_RE.findall(" ".join(lines)))
+    return rows, page_count, empty_pages, ssn_seen
 
 
 def process_pdf(path, engine: str = "auto"):
     """Return (rows, diagnostics) for one PDF.
 
-    The fast engine runs first. If the WHOLE FILE comes back with no rows,
-    it is read again with the other engine before being written off.
+    The retry rule is COMPLETENESS, not emptiness. The earlier version only
+    re-read a file that produced zero rows, which meant a file that produced
+    SOME students but not all sailed through looking healthy -- the failure
+    had to be caught by eye against the PDF. Comparing rows against the SSN
+    tokens actually present on the pages makes the loss self-detecting, and
+    every result carries that comparison into the workbook whether or not a
+    retry happened.
 
-    File level rather than page level is deliberate. On a report this size
-    most pages are course detail carrying no student line at all, so a
-    page-level retry would fire on the majority of pages and hand back the
-    entire speed gain. A file that yields nothing is the failure that
-    actually matters, and retrying only those is free."""
+    A retry is only worth doing when it can find MORE, so the better result
+    wins and the count that motivated the retry is kept for the record."""
     path = Path(path)
 
-    order = available_engines() if engine == "auto" else [engine]
-    order = [e for e in order if ENGINES[e][1]()]
-    if not order:
-        raise RuntimeError("no PDF engine available -- pip install pymupdf pdfplumber")
-    # "mupdf" first whenever we are choosing for ourselves.
     if engine == "auto":
-        order.sort(key=lambda e: e != "mupdf")
+        order = available_engines()
+        # Proven engine first. See DEFAULT_ENGINE.
+        order.sort(key=lambda e: e != DEFAULT_ENGINE)
+    else:
+        order = [engine] if ENGINES[engine][1]() else []
+    if not order:
+        raise RuntimeError("no PDF engine available -- pip install pdfplumber pymupdf")
 
     primary = order[0]
     try:
-        rows, page_count, empty_pages = read_with(path, primary)
+        rows, page_count, empty_pages, ssn_seen = read_with(path, primary)
         error = ""
     except Exception as exc:                                    # noqa: BLE001
-        rows, page_count, empty_pages = [], 0, 0
+        rows, page_count, empty_pages, ssn_seen = [], 0, 0, 0
         error = f"{type(exc).__name__}: {exc}"
 
-    fallback_used = ""
-    if not rows and engine == "auto" and len(order) > 1:
+    engine_used, fallback_used = primary, ""
+
+    # Retry when the page held more SSNs than we produced rows for, or when
+    # nothing came back at all.
+    incomplete = len(rows) < ssn_seen or (not rows and not error)
+    if engine == "auto" and incomplete and len(order) > 1:
         alt = order[1]
         try:
-            alt_rows, alt_pages, alt_empty = read_with(path, alt)
+            alt_rows, alt_pages, alt_empty, alt_seen = read_with(path, alt)
         except Exception as exc:                                # noqa: BLE001
-            alt_rows, alt_pages, alt_empty = [], 0, 0
-            error = f"{error}; {type(exc).__name__}: {exc}" if error else \
-                f"{type(exc).__name__}: {exc}"
-        if alt_rows:
-            note = f"file read with the {alt} engine after {primary} found no rows"
+            alt_rows, alt_pages, alt_empty, alt_seen = [], 0, 0, 0
+            error = (f"{error}; {type(exc).__name__}: {exc}" if error
+                     else f"{type(exc).__name__}: {exc}")
+
+        if len(alt_rows) > len(rows):
+            note = (f"read with the {alt} engine, which found "
+                    f"{len(alt_rows)} rows against {len(rows)} from {primary}")
             for row in alt_rows:
                 row["Extraction Notes"] = (
                     f"{row['Extraction Notes']}; {note}" if row["Extraction Notes"] else note)
             rows, page_count, empty_pages = alt_rows, alt_pages, alt_empty
-            fallback_used = alt
+            ssn_seen = max(ssn_seen, alt_seen)
+            engine_used, fallback_used = alt, alt
 
+    missing = max(0, ssn_seen - len(rows))
     diagnostics = {
         "File Name": path.name,
         "Pages": page_count,
+        "SSNs On Page": ssn_seen,
         "Rows Found": len(rows),
+        "Missing": missing,
+        "Complete": "" if missing else "yes",
         "Pages With No Student Line": empty_pages,
-        "Engine": fallback_used or primary,
-        "Fallback Used": "yes" if fallback_used else "",
+        "Engine": engine_used,
+        "Fallback Used": fallback_used,
         "Error": error,
     }
     return rows, diagnostics
+
+
+# One definition of the diagnostics shape, so the happy path and the error
+# path cannot drift apart and leave the Reconciliation sheet with ragged
+# columns depending on which files failed.
+DIAGNOSTIC_COLUMNS = [
+    "File Name", "Pages", "SSNs On Page", "Rows Found", "Missing", "Complete",
+    "Pages With No Student Line", "Engine", "Fallback Used", "Error",
+]
+
+
+def blank_diagnostics(name, error=""):
+    row = {key: "" for key in DIAGNOSTIC_COLUMNS}
+    row.update({"File Name": name, "Pages": 0, "SSNs On Page": 0,
+                "Rows Found": 0, "Missing": 0, "Error": error})
+    return row
 
 
 def _worker(args):
@@ -573,9 +656,8 @@ def _worker(args):
     try:
         return process_pdf(path, engine)
     except Exception as exc:                                    # noqa: BLE001
-        return [], {"File Name": Path(path).name, "Pages": 0, "Rows Found": 0,
-                    "Pages With No Student Line": 0, "Engine": "", "Fallback Used": "",
-                    "Error": f"{type(exc).__name__}: {exc}"}
+        return [], blank_diagnostics(Path(path).name,
+                                     f"{type(exc).__name__}: {exc}")
 
 
 def process_folder(pdfs, engine="auto", workers=None, progress=None):
@@ -655,27 +737,74 @@ def mask(text: str) -> str:
     return " ".join(mask_word(w) for w in text.split())
 
 
-def debug_page(path: Path, page_no: int) -> None:
-    """Masked dump of one page's rebuilt lines, with coordinates."""
-    if pdfplumber is None:
-        print("pdfplumber is required for --debug.  pip install pdfplumber")
+def show_split(row, indent="        ") -> None:
+    """Print how one line was split into fields, masked.
+
+    This is the diagnostic that matters when the ROWS are right but the
+    COLUMNS are wrong. Seeing "ID=####### SSN=###-##-#### NAME=Xxxx Xxxxx"
+    against the source line shows immediately whether a value landed in
+    the wrong column, without revealing a single real digit or letter."""
+    print(f"{indent}ID     [{mask(row['ID'])}]")
+    print(f"{indent}SSN    [{mask(row['SSN'])}]")
+    print(f"{indent}PREFIX [{mask(row['Prefix'])}]")
+    print(f"{indent}NAME   [{mask(row['Full Name'])}]")
+    print(f"{indent}  first=[{mask(row['First Name'])}] "
+          f"middle=[{mask(row['Middle'])}] last=[{mask(row['Last Name'])}]")
+    if row["Extraction Notes"]:
+        print(f"{indent}NOTES  {row['Extraction Notes']}")
+
+
+def debug_page(path: Path, page_no: int, engine: str = DEFAULT_ENGINE) -> None:
+    """Masked dump of one page's rebuilt lines AND how each was split."""
+    if not ENGINES[engine][1]():
+        print(f"engine {engine} is not installed")
         return
-    with pdfplumber.open(str(path)) as pdf:
-        if not 1 <= page_no <= len(pdf.pages):
-            print(f"page {page_no} out of range (1..{len(pdf.pages)})")
-            return
-        page = pdf.pages[page_no - 1]
-        print(f"{path.name}  page {page_no} of {len(pdf.pages)}  "
-              f"size={page.width:.0f}x{page.height:.0f}  "
-              f"rotation={getattr(page, 'rotation', 0)}")
+
+    iterator, _ = ENGINES[engine]
+    total = 0
+    for number, lines in iterator(path):
+        total += 1
+        if number != page_no:
+            continue
+
+        print(f"{path.name}  page {page_no}  engine={engine}")
         print("-" * 78)
-        lines = cluster_rows(words_pdfplumber(page))
+        students = 0
         for i, text in enumerate(lines, 1):
             row = parse_line(text)
             flag = "STUDENT" if row else "       "
-            print(f"{i:4} {flag} | {mask(text)[:160]}")
+            print(f"{i:4} {flag} | {mask(text)[:150]}")
+            if row:
+                students += 1
+                show_split(row)
         print("-" * 78)
-        print(f"{sum(1 for t in lines if parse_line(t))} student line(s) on this page")
+        print(f"{students} student line(s) on this page")
+        return
+
+    print(f"page {page_no} out of range (1..{total})")
+
+
+def qa_file(path: Path, engine: str = DEFAULT_ENGINE, limit: int = 25) -> None:
+    """Masked field-by-field dump of every student row in one file.
+
+    Use this when the workbook holds the wrong values: it shows the source
+    line and the parsed fields side by side, masked, so a bad split can be
+    pasted into a ticket or a chat and diagnosed without exposing PII."""
+    rows, diag = process_pdf(path, engine=engine)
+    print(f"{path.name}   pages={diag['Pages']}  rows={diag['Rows Found']}  "
+          f"engine={diag['Engine']}"
+          + (f"  ERROR={diag['Error']}" if diag["Error"] else ""))
+    print("=" * 78)
+    for i, row in enumerate(rows[:limit], 1):
+        print(f"\n[{i}] page {row['Page Number']}")
+        print(f"    LINE   | {mask(row['Source Line'])[:150]}")
+        show_split(row, indent="    ")
+    if len(rows) > limit:
+        print(f"\n... {len(rows) - limit} more row(s) not shown "
+              f"(raise the limit if needed)")
+    flagged = [r for r in rows if r["Extraction Notes"]]
+    print("\n" + "=" * 78)
+    print(f"{len(rows)} row(s), {len(flagged)} carrying an extraction note")
 
 
 # ===========================================================================
@@ -731,18 +860,18 @@ def verify(folder: str) -> None:
     for p in pdfs:
         t0 = time.perf_counter()
         try:
-            rows_m, _, _ = read_with(p, "mupdf")
+            rows_m, _, _, seen_m = read_with(p, "mupdf")
             err_m = ""
         except Exception as exc:                                # noqa: BLE001
-            rows_m, err_m = [], f"{type(exc).__name__}"
+            rows_m, seen_m, err_m = [], 0, f"{type(exc).__name__}"
         t_m = time.perf_counter() - t0
 
         t0 = time.perf_counter()
         try:
-            rows_p, _, _ = read_with(p, "plumber")
+            rows_p, _, _, seen_p = read_with(p, "plumber")
             err_p = ""
         except Exception as exc:                                # noqa: BLE001
-            rows_p, err_p = [], f"{type(exc).__name__}"
+            rows_p, seen_p, err_p = [], 0, f"{type(exc).__name__}"
         t_p = time.perf_counter() - t0
 
         t_m_total += t_m
@@ -784,7 +913,7 @@ def write_workbook(rows, diagnostics, dest: Path) -> Path:
     out = dest / OUTPUT_XLSX_NAME
     frame = pd.DataFrame(rows, columns=OUTPUT_COLUMNS) if rows else \
         pd.DataFrame(columns=OUTPUT_COLUMNS)
-    diag_frame = pd.DataFrame(diagnostics)
+    diag_frame = pd.DataFrame(diagnostics, columns=DIAGNOSTIC_COLUMNS)
 
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Students", index=False)
@@ -815,6 +944,21 @@ def run_headless(src: Path, dst: Path, engine="auto", workers=None) -> None:
     print(f"\n{len(rows)} rows from {len(pdfs)} files ({pages} pages) "
           f"in {elapsed:.1f}s"
           + (f"  --  {pages / elapsed:.0f} pages/sec" if elapsed else ""))
+
+    # Completeness first, because it is the number that decides whether the
+    # run can be signed off. Row count alone looks healthy even when
+    # students are missing.
+    seen = sum(d["SSNs On Page"] for d in diagnostics)
+    incomplete = [d for d in diagnostics if d["Missing"]]
+    print(f"completeness: {len(rows)} rows against {seen} SSN(s) seen on the pages")
+    if incomplete:
+        print(f"\n*** {len(incomplete)} file(s) INCOMPLETE -- students were lost ***")
+        for d in incomplete[:20]:
+            print(f"    {d['File Name']}: {d['Rows Found']} of "
+                  f"{d['SSNs On Page']} (missing {d['Missing']})")
+        print("    Run --qa on one of these to see how its lines were split.")
+    else:
+        print("every file complete -- rows match the SSNs found on the pages")
 
     zero = [d["File Name"] for d in diagnostics if d["Rows Found"] == 0]
     if zero:
@@ -853,7 +997,7 @@ class App:
         self.dst = tk.StringVar()
         self.status = tk.StringVar(value="Choose a source folder and a destination folder.")
         self.eta = tk.StringVar(value="")
-        self.engine = tk.StringVar(value="auto")
+        self.engine = tk.StringVar(value="auto")  # auto == proven engine first
         self.workers = tk.IntVar(value=max(1, (os.cpu_count() or 2) - 1))
         # Disabling the button is not enough on its own: the Return key is
         # bound to the same action and would bypass it, starting a second
@@ -890,7 +1034,7 @@ class App:
         row = tk.Frame(self.root); row.pack(fill="x", **pad)
         tk.Label(row, text="Engine").pack(side="left")
         ttk.Combobox(row, textvariable=self.engine, width=9, state="readonly",
-                     values=["auto", "mupdf", "plumber"]).pack(side="left", padx=6)
+                     values=["auto", "plumber", "mupdf"]).pack(side="left", padx=6)
         tk.Label(row, text="Parallel files").pack(side="left", padx=(12, 0))
         tk.Spinbox(row, from_=1, to=32, textvariable=self.workers,
                    width=4).pack(side="left", padx=6)
@@ -898,7 +1042,7 @@ class App:
                  fg="#555").pack(side="left")
 
         tk.Label(self.root, anchor="w", fg="#555", justify="left",
-                 text="auto = fast engine, slow one retried only if a file reads empty"
+                 text="auto = proven engine (pdfplumber); retries the other only if students look missing"
                  ).pack(fill="x", padx=10)
 
         tk.Label(
@@ -979,24 +1123,45 @@ class App:
             self._set("Writing the workbook...")
             out = write_workbook(all_rows, diagnostics, dst)
 
-            zero = [d["File Name"] for d in diagnostics if d["Rows Found"] == 0]
             pages = sum(d["Pages"] for d in diagnostics)
+            seen = sum(d["SSNs On Page"] for d in diagnostics)
+            incomplete = [d for d in diagnostics if d["Missing"]]
+            zero = [d["File Name"] for d in diagnostics if d["Rows Found"] == 0]
             mins = (time.time() - start) / 60
+
             msg = (f"{len(all_rows)} student rows from {len(pdfs)} PDFs "
                    f"({pages} pages) in {mins:.1f} min.\n\n"
                    f"Saved to:\n{out}\n\n")
-            if zero:
-                msg += (f"{len(zero)} file(s) produced NO rows -- see the "
-                        f"Reconciliation sheet:\n  " + "\n  ".join(zero[:10]))
-                if len(zero) > 10:
-                    msg += f"\n  ... and {len(zero) - 10} more"
+
+            # Lead with completeness. A row count on its own reads as success
+            # even when students are missing, which is how the last run got
+            # signed off and then found wrong by eye.
+            msg += f"Completeness: {len(all_rows)} rows against {seen} SSNs on the pages.\n"
+            if incomplete:
+                msg += (f"\nWARNING -- {len(incomplete)} file(s) are INCOMPLETE. "
+                        f"Students were lost:\n  "
+                        + "\n  ".join(f"{d['File Name']}: {d['Rows Found']} of "
+                                      f"{d['SSNs On Page']}" for d in incomplete[:8]))
+                if len(incomplete) > 8:
+                    msg += f"\n  ... and {len(incomplete) - 8} more"
+                msg += ("\n\nDo NOT sign this off. Run --qa on one of those files "
+                        "to see how its lines were split.")
             else:
-                msg += "Every file produced at least one row."
+                msg += "Every row on every page was accounted for."
+
+            if zero:
+                msg += (f"\n\n{len(zero)} file(s) produced NO rows:\n  "
+                        + "\n  ".join(zero[:8]))
+
             msg += ("\n\nThis workbook holds SSNs in clear text. Move it to the "
                     "approved Global Insider folder and delete any local copy.")
 
-            self._set(f"Done -- {len(all_rows)} rows from {len(pdfs)} PDFs.")
-            messagebox.showinfo("Extraction complete", msg)
+            self._set(f"Done -- {len(all_rows)} rows from {len(pdfs)} PDFs"
+                      + (f", {len(incomplete)} file(s) INCOMPLETE" if incomplete else ""))
+            if incomplete:
+                messagebox.showwarning("Extraction complete -- INCOMPLETE", msg)
+            else:
+                messagebox.showinfo("Extraction complete", msg)
         except Exception:                                       # noqa: BLE001
             traceback.print_exc()
             self._set("Failed -- see the console.")
@@ -1032,9 +1197,20 @@ def main() -> None:
 
     if args and args[0] == "--debug":
         if len(args) < 2:
-            print('usage: --debug "<file.pdf>" [page]')
+            print('usage: --debug "<file.pdf>" [page] [--engine mupdf|plumber]')
             return
-        debug_page(Path(args[1]), int(args[2]) if len(args) > 2 else 1)
+        engine = args[args.index("--engine") + 1] if "--engine" in args else DEFAULT_ENGINE
+        page = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1
+        debug_page(Path(args[1]), page, engine)
+        return
+
+    if args and args[0] == "--qa":
+        if len(args) < 2:
+            print('usage: --qa "<file.pdf>" [--engine mupdf|plumber] [--limit N]')
+            return
+        engine = args[args.index("--engine") + 1] if "--engine" in args else DEFAULT_ENGINE
+        limit = int(args[args.index("--limit") + 1]) if "--limit" in args else 25
+        qa_file(Path(args[1]), engine, limit)
         return
 
     if args and args[0] == "--run":
