@@ -23,6 +23,39 @@ TWO LAYOUTS, DETECTED PER PAGE
     A page that is neither (a detail or continuation page with no
     participant identity on it) simply produces no rows.
 
+WHY BLOCKS ARE GROUPED BY POSITION, NOT BY CAPTION
+    These reports OMIT a caption entirely when its value is empty. A
+    participant with no name on file prints no "NAME:" at all -- not
+    "NAME:" followed by blank. Same for PART ID and the rest.
+
+    So a participant block cannot be delimited by watching for a caption
+    to repeat. The caption that would have marked the boundary is exactly
+    the one that is missing, and the next participant's name gets read
+    backwards onto the previous participant's Part ID:
+
+         printed                        read as
+         PART ID: ...4444               ...4444  CLIFTON, BERA S   <- wrong
+         DATE OF BIRTH: 03/04/1971               person
+         NAME: CLIFTON, BERA S          (row lost entirely)
+         DATE OF BIRTH: 05/06/1972
+
+    Vertical position is never omitted. Blocks are therefore grouped by
+    vertical gap and each is parsed in isolation, so a missing caption
+    leaves a blank field and cannot leak a value across a boundary. A
+    repeated caption inside one block still splits it, which covers two
+    blocks printed with no gap between them.
+
+    selftest() asserts this on a synthetic page built from the case above.
+    Raising BLOCK_GAP_HEIGHTS until the grouping collapses reproduces the
+    original fault, which is how that test was checked to have teeth.
+
+A BLANK PART ID KEEPS THE PARTICIPANT
+    A row or block with no Part ID is still written out, with the cell
+    empty, the reason in Notes and a count in Reconciliation. Dropping it
+    would be a silent loss. In the table layout such a row is only
+    accepted if it still looks like a participant -- a name plus a date or
+    a status -- otherwise report titles and page footers would become rows.
+
 WHY THE DATE COLUMN NEEDS GEOMETRY
     The table layout prints four date columns -- BIRTH, HIRE, REHIRE,
     TERMINATION -- and any of them may be blank on any given row. Reading
@@ -62,14 +95,23 @@ ENGINES
     your own files first if you intend to switch.
 
 COMPLETENESS
-    The Reconciliation sheet counts, per file, how many Part ID tokens
-    were sitting on the pages against how many rows were written, and how
-    many of those rows came out missing a name or a date of birth. A run
-    that dropped participants says so there. A workbook holding 40 of 47
-    participants looks completely healthy otherwise -- there is nothing
-    in it that says "incomplete".
+    The Reconciliation sheet counts, per file, how many Part IDs were
+    sitting on the pages against how many rows were written. A file is
+    Complete only when
 
-    Check that sheet before signing off a run.
+        rows written == Part IDs on page + rows with no Part ID printed
+        no row is missing a name
+        no row had dates on it but none under the BIRTH column
+
+    A blank date of birth does NOT flag the file -- the field is often
+    genuinely empty, and a flag that fires on every file is a flag people
+    learn to ignore. A date that failed to land under the BIRTH column
+    does flag it, because that is a possible misread rather than an empty
+    field. Both counts are on the sheet either way.
+
+    Check that sheet before signing off a run. A workbook holding 40 of 47
+    participants looks completely healthy otherwise -- there is nothing in
+    it that says "incomplete".
 
 HANDLING OF PERSONAL DATA
     Every row of the output is name + SSN + date of birth, which is a
@@ -92,8 +134,20 @@ USAGE
     ... --selftest                Build a synthetic PDF (fabricated data,
                                   no real PII) and assert the parse.
     ... --qa <file.pdf>           Masked dump of how each line was split.
+    ... --lines <file.pdf> [--page N]
+                                  Masked geometry dump: every rebuilt line,
+                                  each word's x span and the column it was
+                                  read as. Letters print as A and digits as
+                                  9, so the output can be shared to diagnose
+                                  a misread without moving any PII.
     ... --verify <folder>         Read every PDF with both engines and
                                   report disagreements. Counts only.
+
+FIELDS WRITTEN
+    Part ID (SSN, normalised to 123-45-6789), Name as printed plus a
+    Last / First / Middle / Suffix split, Date of Birth and Date of Death.
+    Each date and the Part ID also keep an "As Printed" column, so nothing
+    is lost to normalisation.
 """
 from __future__ import annotations
 
@@ -145,6 +199,8 @@ OUTPUT_COLUMNS = [
     "Suffix",
     "Date Of Birth",
     "Date Of Birth As Printed",
+    "Date Of Death",
+    "Date Of Death As Printed",
     "Notes",
 ]
 
@@ -156,10 +212,18 @@ RECON_COLUMNS = [
     "Rows Written",
     "Rows Missing Name",
     "Rows Missing DOB",
+    "Rows With Suspicious DOB",
+    "Rows Without Part ID",
     "Rows With Non-SSN Part ID",
     "Complete",
     "Error",
 ]
+
+# Written into Notes when a row carried dates but none of them sat under the
+# DATE OF BIRTH column. Distinct from a row that printed no dates at all: the
+# first is a possible misread, the second is just an empty field.
+SUSPICIOUS_DOB_NOTE = "no date sat under the DATE OF BIRTH column"
+NO_PART_ID_NOTE = "no Part ID printed"
 
 # horizontal gap, in points, that separates one header caption from the next.
 # Captions inside one column ("DATE OF HIRE") sit a few points apart; adjacent
@@ -278,7 +342,9 @@ def split_name(printed: str):
     suffix, note)."""
     text = squeeze(printed).strip(" ,")
     if not text:
-        return "", "", "", "", "name is blank"
+        # No note: whichever parser produced the blank has already said so,
+        # and in more specific terms than this function could.
+        return "", "", "", "", ""
 
     note = ""
     if "," in text:
@@ -424,13 +490,14 @@ COLUMN_KEYWORDS = [
     ("div_loc", ("DIV/LOC", "DIVLOC", "DIV / LOC", "DIV")),
     ("status", ("STATUS",)),
     ("dob", ("BIRTH",)),
+    ("death", ("DEATH",)),
     ("rehire", ("REHIRE",)),
     ("hire", ("HIRE",)),
     ("term", ("TERMINATION",)),
     ("balance", ("BALANCE",)),
 ]
 
-DATE_COLUMN_KEYS = ("dob", "hire", "rehire", "term")
+DATE_COLUMN_KEYS = ("dob", "death", "hire", "rehire", "term")
 
 
 def find_header_band(rows):
@@ -541,21 +608,24 @@ def parse_table_page(rows, colmap, header_index, file_name, page_num, inherited)
             if w["x0"] >= part_id_left and centre_x(w) <= right_of_part_id
         ]
         id_word = next((w for w in id_words if looks_like_part_id(w["text"])), None)
-        if id_word is None:
-            continue
-        candidates += 1
 
         notes = []
         if inherited:
             notes.append("column layout inherited from an earlier page")
 
-        raw_id = id_word["text"]
-        if not SSN_TOKEN_RE.match(raw_id):
+        raw_id = id_word["text"] if id_word else ""
+        if id_word is None:
+            # The report leaves the cell empty rather than printing a
+            # placeholder, so the participant has to be recognised from the
+            # rest of the row instead.
+            notes.append(NO_PART_ID_NOTE + " on this row")
+        elif not SSN_TOKEN_RE.match(raw_id):
             notes.append("Part ID is not SSN-shaped")
 
+        name_left = id_word["x1"] if id_word else colmap["name"]["x0"] - 6.0
         name_words = [
             w for w in row
-            if w["x0"] > id_word["x1"] and centre_x(w) < name_stop
+            if w["x0"] > name_left and centre_x(w) < name_stop
         ]
         # Second guard, independent of geometry: a name never contains a
         # date, an SSN or a status word, so anything from there rightwards
@@ -569,21 +639,36 @@ def parse_table_page(rows, colmap, header_index, file_name, page_num, inherited)
                 break
             kept.append(t)
         printed_name = squeeze(" ".join(kept))
-        if not printed_name:
-            notes.append("no name found in the name column")
 
-        dob_raw = ""
+        dob_raw, death_raw = "", ""
         date_words = [w for w in row if DATE_TOKEN_RE.match(w["text"])]
         for w in date_words:
-            if nearest_date_column(colmap, centre_x(w)) == "dob":
+            column = nearest_date_column(colmap, centre_x(w))
+            if column == "dob" and not dob_raw:
                 dob_raw = w["text"]
-                break
+            elif column == "death" and not death_raw:
+                death_raw = w["text"]
+
+        if id_word is None:
+            # With no Part ID to anchor on, only accept the row if it still
+            # looks like a participant. Otherwise report titles, period
+            # headings and page footers would all become rows.
+            has_status = any(
+                w["text"].strip(".,").upper() in STATUS_WORDS for w in row
+            )
+            if not (printed_name and (date_words or has_status)):
+                continue
+        else:
+            candidates += 1
+
+        if not printed_name:
+            notes.append("no name found in the name column")
         if not dob_raw and date_words:
-            notes.append("no date sat under the DATE OF BIRTH column")
+            notes.append(SUSPICIOUS_DOB_NOTE)
 
         out.append(make_row(
             file_name, page_num, "table (inherited)" if inherited else "table",
-            raw_id, printed_name, dob_raw, notes
+            raw_id, printed_name, dob_raw, notes, death_raw,
         ))
     return out, candidates
 
@@ -636,47 +721,125 @@ def label_pairs(line: str):
     return pairs
 
 
-def parse_label_page(rows, file_name, page_num):
-    """Extract participant blocks from a "LABEL: value" page."""
-    out, candidates = [], 0
-    record, seen_part_id = {}, False
+# Labels that belong to a participant's identity block. Anything else on the
+# page (deferral percentages, fund allocations) is read but not used to decide
+# where one participant ends and the next begins.
+PARTICIPANT_LABEL_KEYS = {
+    "part_id", "name", "dob", "death", "status", "hire", "rehire", "term",
+    "entry", "div_loc", "employee_id", "plan",
+}
 
-    def flush():
-        nonlocal record, seen_part_id
-        if record.get("part_id") or (record.get("name") and record.get("dob")):
-            notes = []
-            if not record.get("part_id"):
-                notes.append("no Part ID printed in this block")
-            out.append(make_row(
-                file_name, page_num, "label",
-                record.get("part_id", ""), record.get("name", ""),
-                record.get("dob", ""), notes,
-            ))
-        record, seen_part_id = {}, False
+# Words that turn "NAME:" into somebody else's caption. The allocation detail
+# below a participant block prints fund and plan names with the same word, and
+# reading one of those as a participant name would invent a record.
+NAME_PREFIX_BLOCK = {
+    "FUND", "PLAN", "INVESTMENT", "OPTION", "SOURCE", "CONTRACT", "EMPLOYER",
+    "COMPANY", "ACCOUNT", "PRODUCT", "VENDOR", "SUBACCOUNT", "PORTFOLIO",
+    "FIRST", "LAST", "MIDDLE",
+}
 
+# How many glyph heights of blank space end a participant block. Lines inside
+# one block are printed about 1.5 heights apart; the gap to the next block, or
+# down to the allocation detail, is far larger.
+BLOCK_GAP_HEIGHTS = 2.5
+
+
+def name_is_participant(line: str, position: int) -> bool:
+    """False when "NAME:" is the tail of a compound caption like "FUND NAME:"."""
+    before = line[:position].rstrip()
+    if not before:
+        return True
+    return before.split()[-1].strip(":").upper() not in NAME_PREFIX_BLOCK
+
+
+def label_blocks(rows):
+    """Group label-bearing lines into participant blocks by vertical gap.
+
+    This is the whole reason the parser does not lose track of who owns which
+    value. These reports omit a caption entirely when its value is empty -- a
+    participant with no name on file prints no "NAME:" at all, rather than
+    "NAME:" followed by blank. So a block cannot be delimited by watching for
+    a caption to repeat: the caption that would have marked the boundary is
+    exactly the one that is missing, and the next participant's name gets
+    read back onto the previous participant's Part ID.
+
+    Vertical position is not omitted. Grouping on it means a missing caption
+    leaves a blank field and nothing more.
+    """
+    heights, entries = [], []
     for row in rows:
         line = squeeze(row_text(row))
         if not line:
             continue
-        for key, value, position in label_pairs(line):
-            if key not in ("part_id", "name", "dob"):
+        heights.append(sum(w["bottom"] - w["top"] for w in row) / len(row))
+        pairs = label_pairs(line)
+        if pairs:
+            entries.append({
+                "y": sum((w["top"] + w["bottom"]) / 2 for w in row) / len(row),
+                "pairs": pairs,
+                "line": line,
+            })
+    if not entries:
+        return []
+
+    median_height = sorted(heights)[len(heights) // 2] or 8.0
+    gap_limit = median_height * BLOCK_GAP_HEIGHTS
+
+    blocks, current, previous_y = [], [], None
+    for entry in entries:
+        if previous_y is not None and (entry["y"] - previous_y) > gap_limit:
+            blocks.append(current)
+            current = []
+        current.append(entry)
+        previous_y = entry["y"]
+    blocks.append(current)
+    return blocks
+
+
+def records_from_block(block):
+    """One block usually holds one participant. A repeated caption inside it
+    means two blocks were printed with no gap between them, so split there."""
+    records, record = [], {}
+    for entry in block:
+        for key, value, position in entry["pairs"]:
+            if key not in PARTICIPANT_LABEL_KEYS:
                 continue
-            # "NAME" is only the participant's name when it opens the line.
-            # Mid-line it is far more likely to be a fund or plan name in the
-            # detail section below the block.
-            if key == "name" and position != 0:
+            if key == "name" and not name_is_participant(entry["line"], position):
                 continue
-            if key == "part_id":
-                if seen_part_id and value:
-                    flush()
-                if value:
-                    seen_part_id = True
-                    candidates += 1
-            elif record.get(key) and value and value != record[key]:
-                flush()
-            if value:
+            if value and record.get(key) and value != record[key]:
+                records.append(record)
+                record = {}
+            # Blank values are still stored: a caption that was printed with
+            # nothing after it is evidence this is a participant block.
+            if value or key not in record:
                 record[key] = value
-    flush()
+    if record:
+        records.append(record)
+    return records
+
+
+def parse_label_page(rows, file_name, page_num):
+    """Extract participant records from a "LABEL: value" page."""
+    out, candidates = [], 0
+    for block in label_blocks(rows):
+        for record in records_from_block(block):
+            part_id = record.get("part_id", "")
+            name = record.get("name", "")
+            # A lone caption is not a participant. Two or more identity
+            # captions in one block is.
+            if not part_id and not (name and len(record) >= 2):
+                continue
+            notes = []
+            if part_id:
+                candidates += 1
+            else:
+                notes.append(NO_PART_ID_NOTE + " in this block")
+            if not name:
+                notes.append("no name printed in this block")
+            out.append(make_row(
+                file_name, page_num, "label", part_id, name,
+                record.get("dob", ""), notes, record.get("death", ""),
+            ))
     return out, candidates
 
 
@@ -721,7 +884,8 @@ def parse_pattern_rows(rows, file_name, page_num):
 # row assembly
 # ---------------------------------------------------------------------------
 
-def make_row(file_name, page_num, layout, raw_id, printed_name, raw_dob, notes):
+def make_row(file_name, page_num, layout, raw_id, printed_name, raw_dob, notes,
+             raw_death=""):
     notes = list(notes)
     last, first, middle, suffix, name_note = split_name(printed_name)
     if name_note:
@@ -732,8 +896,14 @@ def make_row(file_name, page_num, layout, raw_id, printed_name, raw_dob, notes):
         notes.append("date of birth does not parse")
     elif dob_note:
         notes.append(dob_note)
-    elif not raw_dob:
+    elif not raw_dob and SUSPICIOUS_DOB_NOTE not in notes:
         notes.append("no date of birth printed")
+
+    # A blank date of death is the normal case, so it is never noted. Only a
+    # value that will not parse is worth reporting.
+    death, death_note = norm_date(raw_death)
+    if raw_death and not death:
+        notes.append(death_note or "date of death does not parse")
 
     return {
         "File Name": file_name,
@@ -748,6 +918,8 @@ def make_row(file_name, page_num, layout, raw_id, printed_name, raw_dob, notes):
         "Suffix": suffix,
         "Date Of Birth": dob,
         "Date Of Birth As Printed": squeeze(raw_dob),
+        "Date Of Death": death,
+        "Date Of Death As Printed": squeeze(raw_death),
         "Notes": "; ".join(n for n in notes if n),
     }
 
@@ -780,6 +952,8 @@ def process_pdf(path, engine: str = DEFAULT_ENGINE):
         "Rows Written": 0,
         "Rows Missing Name": 0,
         "Rows Missing DOB": 0,
+        "Rows With Suspicious DOB": 0,
+        "Rows Without Part ID": 0,
         "Rows With Non-SSN Part ID": 0,
         "Complete": "",
         "Error": "",
@@ -828,15 +1002,26 @@ def process_pdf(path, engine: str = DEFAULT_ENGINE):
     diag["Rows Written"] = len(rows_out)
     diag["Rows Missing Name"] = sum(1 for r in rows_out if not r["Name As Printed"])
     diag["Rows Missing DOB"] = sum(1 for r in rows_out if not r["Date Of Birth"])
+    diag["Rows With Suspicious DOB"] = sum(
+        1 for r in rows_out if SUSPICIOUS_DOB_NOTE in r["Notes"]
+    )
+    diag["Rows Without Part ID"] = sum(
+        1 for r in rows_out if not r["Part ID (SSN)"]
+    )
     diag["Rows With Non-SSN Part ID"] = sum(
-        1 for r in rows_out if not re.match(r"^\d{3}-\d{2}-\d{4}$", r["Part ID (SSN)"])
+        1 for r in rows_out
+        if r["Part ID (SSN)"]
+        and not re.match(r"^[\dX]{3}-[\dX]{2}-\d{4}$", r["Part ID (SSN)"])
     )
     diag["Layouts Seen"] = ", ".join(sorted(set(layouts))) or "none"
+    # Every Part ID on the page became a row, plus the rows that legitimately
+    # had no Part ID printed. A blank date of birth is normal and does not
+    # flag the file; a date that failed to land under the BIRTH column does.
     diag["Complete"] = "YES" if (
         not diag["Error"]
-        and diag["Rows Written"] == diag["Part IDs On Page"]
+        and diag["Rows Written"] == diag["Part IDs On Page"] + diag["Rows Without Part ID"]
         and diag["Rows Missing Name"] == 0
-        and diag["Rows Missing DOB"] == 0
+        and diag["Rows With Suspicious DOB"] == 0
     ) else "CHECK"
     return rows_out, diag
 
@@ -923,7 +1108,8 @@ def write_workbook(rows, diagnostics, dest: Path, masked=False) -> Path:
     _write_sheet(
         wb.active, OUTPUT_COLUMNS, rows,
         text_columns=("Part ID (SSN)", "Part ID As Printed",
-                      "Date Of Birth", "Date Of Birth As Printed"),
+                      "Date Of Birth", "Date Of Birth As Printed",
+                      "Date Of Death", "Date Of Death As Printed"),
     )
     wb.active.title = "Data"
 
@@ -960,6 +1146,63 @@ def qa_file(path, engine=DEFAULT_ENGINE, limit=25):
             print(f"          note: {r['Notes']}")
     if len(rows) > limit:
         print(f"    ... {len(rows) - limit} more row(s) not shown")
+
+
+def _shape(text: str) -> str:
+    """Reduce a word to its shape: letters to A, digits to 9.
+
+    "CLARK,LISA" becomes "AAAAA,AAAA" and "177-72-5725" becomes
+    "999-99-9999". Enough to diagnose a column or line-grouping fault,
+    nothing that identifies anybody.
+    """
+    return re.sub(r"[A-Za-z]", "A", re.sub(r"\d", "9", fold(text)))
+
+
+def which_column(colmap, word):
+    """The column a word would be read as belonging to."""
+    if not colmap:
+        return "?"
+    x = centre_x(word)
+    if x <= part_id_right_edge(colmap):
+        return "part_id"
+    if x < name_right_edge(colmap):
+        return "name"
+    if DATE_TOKEN_RE.match(word["text"]):
+        return nearest_date_column(colmap, x) or "?"
+    return min(colmap.items(), key=lambda kv: abs(kv[1]["centre"] - x))[0]
+
+
+def dump_lines(path, engine=DEFAULT_ENGINE, page_no=None, limit=80):
+    """Masked geometry dump: every rebuilt line, its y, and each word's x
+    span and column. Diagnoses a misread without moving any PII."""
+    path = Path(path)
+    print(f"{path.name}  --  shapes only, no participant data")
+    colmap = None
+    for page_num, words in read_pages(path, engine):
+        if page_no and page_num != page_no:
+            continue
+        rows = cluster_rows(words)
+        found, header_index = build_column_map(rows)
+        if found:
+            colmap = found
+        print(f"\n--- page {page_num}   layout={detect_layout(rows)}   "
+              f"header row={header_index}   lines={len(rows)}")
+        if colmap:
+            ordered = sorted(colmap.items(), key=lambda kv: kv[1]["x0"])
+            print("    columns  " + "  ".join(
+                f"{k}[{c['x0']:.0f}-{c['x1']:.0f}]" for k, c in ordered))
+            print(f"    part id ends {part_id_right_edge(colmap):.0f}, "
+                  f"name ends {name_right_edge(colmap):.0f}")
+        for row in rows[:limit]:
+            y = sum((w["top"] + w["bottom"]) / 2 for w in row) / len(row)
+            body = " ".join(
+                f"[{w['x0']:.0f}-{w['x1']:.0f} {which_column(colmap, w)}]"
+                f"{_shape(w['text'])}"
+                for w in row
+            )
+            print(f"  y={y:7.1f}  {body}")
+        if len(rows) > limit:
+            print(f"  ... {len(rows) - limit} more line(s) not shown")
 
 
 def verify(folder, limit=None):
@@ -1062,7 +1305,7 @@ def _build_test_pdf(dest: Path) -> Path:
     put(p2, 620, 100, "DIV/LOC:")
     put(p2, 40, 112, "PART ID: 987654321")
     put(p2, 250, 112, "DATE OF HIRE: 06/01/2015")
-    put(p2, 430, 112, "DATE OF DEATH:")
+    put(p2, 430, 112, "DATE OF DEATH: 03/22/2024")
     put(p2, 620, 112, "PRE-TAX DEFERRAL % OR $:")
     put(p2, 40, 124, "STATUS: Active")
     put(p2, 250, 124, "DATE OF ENTRY: 07/01/2015")
@@ -1081,6 +1324,61 @@ def _build_test_pdf(dest: Path) -> Path:
     put(p3, 358, 130, "07/04/1955")
     put(p3, 415, 130, "09/09/1979")
     put(p3, 582, 130, "12/31/2014")
+
+    # --- page 4: table carrying BOTH a birth and a death column --------------
+    # The two captions sit side by side, so this is where a date-of-death
+    # would be misread as a date of birth if the columns were not anchored.
+    p4 = doc.new_page(width=792, height=612)
+    put(p4, 40, 60, "Small Cash Out Monitoring Report -- with date of death")
+    put(p4, 305, 100, "DATE OF")
+    put(p4, 380, 100, "DATE OF")
+    put(p4, 455, 100, "DATE OF")
+    for x, caption in [
+        (40, "PART ID"), (110, "NAME"), (250, "STATUS"),
+        (310, "BIRTH"), (385, "DEATH"), (450, "TERMINATION"),
+    ]:
+        put(p4, x, 110, caption)
+    # a participant with a date of death, and one without
+    put(p4, 40, 130, "567-89-0123")
+    put(p4, 110, 130, "DENNING, JAMES DARYL")
+    put(p4, 250, 130, "Deceased")
+    put(p4, 303, 130, "02/09/1962")
+    put(p4, 378, 130, "11/30/2019")
+    put(p4, 452, 130, "11/30/2019")
+    put(p4, 40, 144, "678-90-1234")
+    put(p4, 110, 144, "DAVIS, CATHRYN R")
+    put(p4, 250, 144, "Active")
+    put(p4, 303, 144, "08/21/1960")
+    # a participant whose PART ID cell is empty: must still be written out,
+    # flagged, rather than dropped
+    put(p4, 110, 158, "BAYLOCK, CINDY KING")
+    put(p4, 250, 158, "Active")
+    put(p4, 303, 158, "04/05/1959")
+
+    # --- page 5: label layout with captions OMITTED, not blank ---------------
+    # This is the case that mis-assigned names. The report prints no caption
+    # at all when a value is empty, so block 2 has no "NAME:" line and block 3
+    # has no "PART ID:" line. Block 3's name must NOT land on block 2's
+    # Part ID.
+    p5 = doc.new_page(width=792, height=612)
+    put(p5, 40, 60, "Participant Contribution Investment Allocation Report")
+
+    put(p5, 40, 100, "NAME: CLARK, CHRISTOPHER R")
+    put(p5, 300, 100, "DATE OF BIRTH: 01/02/1970")
+    put(p5, 40, 112, "PART ID: 111223333")
+    put(p5, 300, 112, "DATE OF HIRE: 01/01/2000")
+
+    # no NAME caption anywhere in this block
+    put(p5, 40, 170, "PART ID: 222334444")
+    put(p5, 300, 170, "DATE OF BIRTH: 03/04/1971")
+    put(p5, 40, 182, "STATUS: Active")
+    put(p5, 300, 182, "DATE OF HIRE: 02/02/2001")
+
+    # no PART ID caption anywhere in this block
+    put(p5, 40, 240, "NAME: CLIFTON, BERA S")
+    put(p5, 300, 240, "DATE OF BIRTH: 05/06/1972")
+    put(p5, 40, 252, "STATUS: Active")
+    put(p5, 300, 252, "DATE OF HIRE: 03/03/2002")
 
     doc.save(str(dest))
     doc.close()
@@ -1122,7 +1420,7 @@ def selftest() -> int:
             tag = f"[{engine}]"
             by_id = {r["Part ID (SSN)"]: r for r in rows}
 
-            check(f"{tag} row count", len(rows), 5)
+            check(f"{tag} row count", len(rows), 11)
             check(f"{tag} error", diag["Error"], "")
 
             r = by_id.get("123-45-6789", {})
@@ -1144,9 +1442,48 @@ def selftest() -> int:
             check(f"{tag} label name", r.get("Name As Printed"), "ABBEY, BORIS S")
             check(f"{tag} label dob", r.get("Date Of Birth"), "04/12/1973")
 
+            check(f"{tag} label death", r.get("Date Of Death"), "03/22/2024")
+
             r = by_id.get("456-78-9012", {})
             check(f"{tag} inherited dob", r.get("Date Of Birth"), "07/04/1955")
             check(f"{tag} inherited layout", r.get("Layout"), "table (inherited)")
+
+            # birth and death columns side by side must not be confused
+            r = by_id.get("567-89-0123", {})
+            check(f"{tag} table dob beside death", r.get("Date Of Birth"), "02/09/1962")
+            check(f"{tag} table death", r.get("Date Of Death"), "11/30/2019")
+
+            r = by_id.get("678-90-1234", {})
+            check(f"{tag} dob with no death", r.get("Date Of Birth"), "08/21/1960")
+            check(f"{tag} blank death", r.get("Date Of Death"), "")
+
+            # a table row whose PART ID cell was empty: kept, and flagged
+            by_name = {r["Name As Printed"]: r for r in rows}
+            r = by_name.get("BAYLOCK, CINDY KING", {})
+            check(f"{tag} blank part id kept", r.get("Date Of Birth"), "04/05/1959")
+            check(f"{tag} blank part id blank", r.get("Part ID (SSN)"), "")
+            check(f"{tag} blank part id flagged",
+                  NO_PART_ID_NOTE in r.get("Notes", ""), True)
+
+            # --- the omitted-caption case that mis-assigned names -----------
+            r = by_id.get("111-22-3333", {})
+            check(f"{tag} block 1 name", r.get("Name As Printed"),
+                  "CLARK, CHRISTOPHER R")
+            check(f"{tag} block 1 dob", r.get("Date Of Birth"), "01/02/1970")
+
+            # block 2 printed no NAME caption at all. Its name must be blank,
+            # NOT block 3's name.
+            r = by_id.get("222-33-4444", {})
+            check(f"{tag} block 2 name stays blank", r.get("Name As Printed"), "")
+            check(f"{tag} block 2 dob", r.get("Date Of Birth"), "03/04/1971")
+
+            # block 3 printed no PART ID caption. Its name must survive with a
+            # blank Part ID, not be swallowed by block 2.
+            r = by_name.get("CLIFTON, BERA S", {})
+            check(f"{tag} block 3 kept", r.get("Date Of Birth"), "05/06/1972")
+            check(f"{tag} block 3 part id blank", r.get("Part ID (SSN)"), "")
+            check(f"{tag} block 3 flagged",
+                  NO_PART_ID_NOTE in r.get("Notes", ""), True)
 
     if failures:
         print("SELFTEST FAILED")
@@ -1163,6 +1500,17 @@ def selftest() -> int:
 
 def find_pdfs(folder):
     return sorted(Path(folder).rglob("*.pdf"))
+
+
+def recon_summary(d) -> str:
+    """One line per flagged file. No participant data, counts only."""
+    return (
+        f"{d['File Name']}: ids={d['Part IDs On Page']} rows={d['Rows Written']} "
+        f"no-part-id={d['Rows Without Part ID']} "
+        f"no-name={d['Rows Missing Name']} "
+        f"no-dob={d['Rows Missing DOB']} "
+        f"dob-suspect={d['Rows With Suspicious DOB']} {d['Error']}".rstrip()
+    )
 
 
 def run_headless(src, out, engine=DEFAULT_ENGINE, workers=None, masked=False) -> int:
@@ -1185,9 +1533,7 @@ def run_headless(src, out, engine=DEFAULT_ENGINE, workers=None, masked=False) ->
     if flagged:
         print(f"{len(flagged)} file(s) need checking on the Reconciliation sheet:")
         for d in flagged:
-            print(f"  {d['File Name']}: ids={d['Part IDs On Page']} "
-                  f"rows={d['Rows Written']} no-name={d['Rows Missing Name']} "
-                  f"no-dob={d['Rows Missing DOB']} {d['Error']}")
+            print("  " + recon_summary(d))
     else:
         print("Reconciliation: every file complete.")
     print("\nThis workbook holds names, SSNs and dates of birth. Save it to the "
@@ -1323,10 +1669,7 @@ class App:
             self.log(f"{len(flagged)} file(s) need checking on the "
                      f"Reconciliation sheet:")
             for d in flagged:
-                self.log(f"  {d['File Name']}: ids={d['Part IDs On Page']} "
-                         f"rows={d['Rows Written']} "
-                         f"no-name={d['Rows Missing Name']} "
-                         f"no-dob={d['Rows Missing DOB']} {d['Error']}")
+                self.log("  " + recon_summary(d))
         else:
             self.log("Reconciliation: every file complete.")
         self.status.config(text="Done.")
@@ -1362,6 +1705,11 @@ def main() -> int:
                         help="write masked Part IDs (***-**-6789)")
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--qa", metavar="PDF", help="masked dump of one file")
+    parser.add_argument("--lines", metavar="PDF",
+                        help="masked geometry dump: rebuilt lines, x spans "
+                             "and column assignment (shapes only, no PII)")
+    parser.add_argument("--page", type=int, default=None,
+                        help="restrict --lines to one page")
     parser.add_argument("--verify", metavar="FOLDER",
                         help="compare both engines over a folder")
     args = parser.parse_args()
@@ -1374,6 +1722,9 @@ def main() -> int:
         return selftest()
     if args.qa:
         qa_file(args.qa, args.engine)
+        return 0
+    if args.lines:
+        dump_lines(args.lines, args.engine, args.page)
         return 0
     if args.verify:
         return verify(args.verify)
