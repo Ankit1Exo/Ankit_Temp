@@ -113,8 +113,12 @@ HANDLING NOTE
     not to a desktop or a source-control working tree.
 
 Usage:
-    python "260811 AM k1 partner ssn name address extractor.py" <pdf_or_folder> [-o out.csv]
-    python "260811 AM k1 partner ssn name address extractor.py" <pdf> --debug [--debug-page N]
+    Run it with no arguments -- from IDLE with F5, or by double-clicking -- and
+    it asks for the PDFs and for where to save the CSV.
+
+    Or from a command line:
+      python "260811 AM k1 partner ssn name address extractor.py" <pdf_or_folder> [-o out.csv]
+      python "260811 AM k1 partner ssn name address extractor.py" <pdf> --debug [--debug-page N]
 
 Requires:
     pip install pymupdf tqdm
@@ -158,6 +162,13 @@ MIN_COLUMN_FRACTION = 0.25
 
 CSV_COLUMNS = ["Document ID", "Page", "Name", "First Name", "MI", "Last Name",
                "Address", "TIN", "TIN Type", "Entity Type", "Partnership EIN"]
+
+OUTPUT_CSV_NAME = "k1_partner_extracted.csv"
+
+# Set when the script was started with no arguments (IDLE F5, or a
+# double-click). The console window is then kept open at the end so the summary
+# and any warnings can actually be read before it closes.
+LAUNCHED_INTERACTIVELY = False
 
 # ".?" (not ".") for the apostrophe so a dropped or misread apostrophe -- common
 # when ABBYY OCRs a scanned page -- still matches ("Partners SSN or TIN").
@@ -810,14 +821,60 @@ def debug_page(path: Path, page_num: int, override_fraction):
     doc.close()
 
 
+def pick_input_and_output():
+    """Ask for the PDFs and the output path when the script was started with no
+    arguments, rather than failing with an argparse usage error -- these scripts
+    are normally launched from IDLE with F5, where there is no command line to
+    pass a path on. Returns (input, output), either of which is None if the
+    dialog was cancelled or tkinter is unavailable."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, messagebox
+    except ImportError:
+        print("tkinter is not available, so the file pickers cannot open.")
+        return None, None
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        whole_folder = messagebox.askyesno(
+            "Schedule K-1 extractor",
+            "Process a whole FOLDER of Schedule K-1 PDFs?\n\n"
+            "Yes  -  pick a folder\n"
+            "No   -  pick a single PDF file")
+        if whole_folder:
+            src = filedialog.askdirectory(title="Select the folder holding the Schedule K-1 PDFs")
+        else:
+            src = filedialog.askopenfilename(title="Select a Schedule K-1 PDF",
+                                             filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")])
+        if not src:
+            return None, None
+
+        initial_dir = Path(src) if whole_folder else Path(src).parent
+        out = filedialog.asksaveasfilename(
+            title="Save the CSV as - use an access-controlled folder, it holds taxpayer identifiers",
+            defaultextension=".csv", initialfile=OUTPUT_CSV_NAME, initialdir=str(initial_dir),
+            filetypes=[("CSV files", "*.csv")])
+        if not out:
+            return None, None
+        return src, out
+    finally:
+        root.destroy()
+
+
 def main():
+    global LAUNCHED_INTERACTIVELY
+
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("input", help="Schedule K-1 PDF file, or folder of them")
-    parser.add_argument("-o", "--output", default="k1_partner_extracted.csv",
+    parser.add_argument("input", nargs="?",
+                        help="Schedule K-1 PDF file, or folder of them. Omit it to be asked for it "
+                             "with a file picker (which is what happens when this script is run "
+                             "from IDLE with F5, or double-clicked)")
+    parser.add_argument("-o", "--output", default=OUTPUT_CSV_NAME,
                         help="Combined (all files) output CSV path. Write it to an access-controlled "
                              "location, not a desktop or a source-control working tree "
-                             "(default: k1_partner_extracted.csv)")
+                             f"(default: {OUTPUT_CSV_NAME})")
     parser.add_argument("--individual-dir", default=None,
                         help="Directory for the individual per-PDF CSVs, named <pdf_stem>_k1_extracted.csv "
                              "(default: same folder as each input PDF)")
@@ -832,6 +889,17 @@ def main():
     parser.add_argument("--debug-page", type=int, default=1, metavar="N",
                         help="Page number to debug when --debug is set (default: 1)")
     args = parser.parse_args()
+
+    if args.input is None:
+        LAUNCHED_INTERACTIVELY = True
+        picked_input, picked_output = pick_input_and_output()
+        if not picked_input:
+            print("Nothing selected -- nothing to do.\n\n"
+                  "From a command line you can also pass the path directly:\n"
+                  f'  python "{Path(__file__).name}" <pdf_or_folder> [-o out.csv]\n'
+                  f'  python "{Path(__file__).name}" <pdf> --debug')
+            return
+        args.input, args.output = picked_input, picked_output
 
     input_path = Path(args.input)
     pdf_files = [input_path] if input_path.is_file() else sorted(input_path.glob("*.pdf"))
@@ -888,4 +956,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # Started by double-click or F5: hold the window open so the summary and
+        # any per-page warnings can be read before it disappears.
+        if LAUNCHED_INTERACTIVELY:
+            try:
+                input("\nPress Enter to close...")
+            except EOFError:
+                pass
