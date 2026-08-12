@@ -64,18 +64,53 @@ WHY BLOCKS ARE GROUPED BY POSITION, NOT BY CAPTION
 
 RECORDS THAT SPAN A PAGE BREAK
     A participant can start at the foot of one page and finish at the head
-    of the next -- the name printed on page 4, the Part ID on page 5.
-    Read page by page those are two half-participants.
+    of the next. Read page by page those are two half-participants.
 
-    So the last record on a page is carried forward, and if it is
-    incomplete it is offered the first record of the next page. The merge
-    only happens when the two share NO field with two different values.
-    On any conflict both are written separately and flagged, because
-    fusing two different people into one row is worse than leaving a split
-    one for a human to join.
+    So the last record on a page is carried forward and offered the FIRST
+    block of the next page -- bottom of one page to top of the next, and
+    nowhere else. A caption further down a page is never joined backwards,
+    because within a page the block grouper has already kept a
+    participant's lines together.
+
+    The merge only happens when the two sides share NO field holding two
+    different values. On any conflict both are written separately and
+    flagged: fusing two different people into one row is worse than
+    leaving a split one for a human to join.
+
+    Two kinds of split exist, and only the first is obvious:
+
+        the identity is split     NAME on page 4, PART ID on page 5.
+                                  The first half is visibly unfinished.
+
+        the identity is whole,    NAME, PART ID and DATE OF BIRTH on page
+        the rest is not           2; STATUS and ADDRESS on page 3. The
+                                  first half looks complete and is not.
+
+    The second is why "complete" is not "has a name and a Part ID". A
+    block carrying NEITHER a name nor a Part ID says nothing about who it
+    belongs to, so it cannot be a participant of its own -- it is the tail
+    of the block above, however finished that one looked, and it is joined
+    on that basis.
+
+    A tail that reaches the top of a page with nothing to join to is still
+    written out, with whatever it carries, flagged that no name was given.
+    It is counted on the Reconciliation sheet so it is never quietly zero.
 
     The same carry joins a name that wrapped across a page break in the
     table layouts.
+
+NINE DIGIT ZIP CODES LOOK EXACTLY LIKE SSNs
+    These reports print ZIP+4 without a separator -- "BOKEELIA, FL
+    339223000" -- and that matches the running-nine-digit SSN pattern
+    perfectly. An address line stranded on a page with too few captions to
+    read as a label page falls to the inherited column map, where the ZIP
+    lands squarely in the Part ID column.
+
+    So a table row is only a participant if it carries something besides
+    a Part ID: a name, a date or a status. A lone Part ID-shaped token is
+    counted as unattributable rather than turned into a person. selftest()
+    asserts a page holding nothing but "BOKEELIA, FL 339223000" produces
+    no rows; without the rule it produces participant 339-22-3000.
 
 NAMES THAT WRAP ONTO A SECOND LINE
     A long name in the table layouts prints across two lines, the second
@@ -139,7 +174,12 @@ COMPLETENESS
         rows written == Part IDs on page + rows with no Part ID printed
         no row is missing a name
         no row had dates on it but none under the BIRTH column
-        no name fragment was left unattached
+        nothing was left unattributable
+
+    "Unattached Fragments" counts everything seen on a page that could not
+    be attributed to a participant: a wrapped name with no row above it, a
+    block tail that joined nobody, and a lone Part ID-shaped token with no
+    name, date or status beside it.
 
     A blank date of birth does NOT flag the file. Two of these reports
     carry no DATE OF BIRTH column at all, and a flag that fires on every
@@ -256,7 +296,7 @@ RECON_COLUMNS = [
     "Rows With Suspicious DOB",
     "Rows Without Part ID",
     "Rows With Non-SSN Part ID",
-    "Unattached Name Fragments",
+    "Unattached Fragments",
     "Complete",
     "Error",
 ]
@@ -780,10 +820,21 @@ def new_record(page_num, layout, **fields):
     return record
 
 
+def has_identity(record) -> bool:
+    return bool(record.get("name") or record.get("last") or record.get("first"))
+
+
 def record_is_complete(record) -> bool:
-    return bool(record.get("part_id")) and bool(
-        record.get("name") or record.get("last") or record.get("first")
-    )
+    return bool(record.get("part_id")) and has_identity(record)
+
+
+def is_fragment(record) -> bool:
+    """A block with neither a name nor a Part ID.
+
+    It cannot be a participant of its own -- there is nothing in it that
+    says who it belongs to -- so it is the tail of the block above.
+    """
+    return not record.get("part_id") and not has_identity(record)
 
 
 def merge_across_pages(carry, record) -> bool:
@@ -794,7 +845,15 @@ def merge_across_pages(carry, record) -> bool:
     two different people fused into one row is a data integrity failure
     that nothing downstream would catch.
     """
-    if carry is None or record_is_complete(carry):
+    if carry is None:
+        return False
+    # "Complete" used to mean the record had a name and a Part ID, and that
+    # was wrong: a block holding both can still have been cut short of its
+    # Status and Address by the page break. A fragment carries no identity
+    # of its own, so it belongs to the record above however finished that
+    # one looked. Only for a record that DOES carry identity does the
+    # completeness test still apply.
+    if not is_fragment(record) and record_is_complete(carry):
         return False
     for key in RECORD_FIELDS:
         a, b = carry.get(key, ""), record.get(key, "")
@@ -812,7 +871,7 @@ def merge_across_pages(carry, record) -> bool:
              if not n.startswith(_STALE_ON_MERGE)]
     if not carry.get("part_id"):
         notes.append(NO_PART_ID_NOTE + " in this block")
-    if not (carry.get("name") or carry.get("last") or carry.get("first")):
+    if not has_identity(carry):
         notes.append(NO_NAME_NOTE)
     notes.append(f"joined with a block continued onto page {record['page']}")
     carry["notes"] = list(dict.fromkeys(notes))
@@ -972,6 +1031,16 @@ def parse_table_page(rows, colmap, header_index, page_num, layout, carry=None):
                 continue
             notes.append(NO_PART_ID_NOTE + " on this row")
         else:
+            if not (has_name or date_words or has_status_word):
+                # A Part-ID-shaped token and nothing else on the row. Nine
+                # digit ZIP codes match the SSN pattern exactly -- these
+                # reports print them, "BOKEELIA, FL 339223000" -- so an
+                # address line stranded on a page read under an inherited
+                # column map looks just like this. Inventing a participant
+                # out of a ZIP code is far worse than reporting that a
+                # token could not be attributed to anybody.
+                fragments += 1
+                continue
             candidates += 1
             fields["part_id"] = id_word["text"]
             if not SSN_TOKEN_RE.match(id_word["text"]):
@@ -1024,7 +1093,7 @@ def parse_pattern_rows(rows, page_num):
             "no column header found; date of birth taken as the leftmost date"
         ]
         records.append(record)
-    return records, candidates
+    return records, candidates, 0
 
 
 # ---------------------------------------------------------------------------
@@ -1216,17 +1285,26 @@ def records_from_block(block):
     return out
 
 
+UNJOINED_TOP_NOTE = ("block carries no name and no Part ID and could not be "
+                     "joined to the previous page")
+UNJOINED_MID_NOTE = ("block carries no name and no Part ID; only a block at "
+                     "the top of a page is joined to the page before it")
+
+
 def parse_label_page(rows, page_num, carry=None):
     """Extract participant records from a "LABEL: value" page."""
-    records, candidates = [], 0
+    records, candidates, unattached = [], 0, 0
     first_on_page = True
     for block in label_blocks(rows):
         for fields, orphans in records_from_block(block):
             part_id = fields.get("part_id", "")
             name = fields.get("name", "")
-            # A lone caption is not a participant. Two or more identity
-            # captions in one block is.
-            if not part_id and not (name and len(fields) >= 2):
+            # A block with an identity is a participant. A block with none is
+            # kept too -- it is usually the tail of one split by a page break,
+            # and discarding it was how Status and Address went missing. A
+            # lone empty caption is neither.
+            if not (part_id or name
+                    or (len(fields) >= 2 and any(fields.values()))):
                 continue
             if part_id:
                 candidates += 1
@@ -1247,25 +1325,46 @@ def parse_label_page(rows, page_num, carry=None):
             )
             record["notes"] = notes
 
-            if first_on_page and carry is not None and carry["layout"] == "label":
-                first_on_page = False
-                if merge_across_pages(carry, record):
+            was_first, first_on_page = first_on_page, False
+            if was_first:
+                # Bottom of one page to top of the next: only the first block
+                # on a page may be the tail of a record the page break cut.
+                if (carry is not None and carry["layout"] == "label"
+                        and merge_across_pages(carry, record)):
                     continue
-            first_on_page = False
+                if is_fragment(record):
+                    unattached += 1
+                    notes.append(UNJOINED_TOP_NOTE)
+            elif is_fragment(record):
+                unattached += 1
+                notes.append(UNJOINED_MID_NOTE)
             records.append(record)
-    return records, candidates
+    return records, candidates, unattached
 
 
 # ---------------------------------------------------------------------------
 # per-file processing
 # ---------------------------------------------------------------------------
 
+# How many participant captions make a page a label page on their own. A page
+# holding only the tail of a block prints no NAME: and no PART ID:, so it has
+# to be recognised from the captions it does carry or the whole tail is lost.
+MIN_CAPTIONS_FOR_LABEL = 3
+
+
 def detect_layout(rows):
     """"label", "table" or None, decided from the page's own content."""
+    captions = 0
     for row in rows:
         text = row_text(row)
         if LABEL_LAYOUT_RE.search(text) or re.match(r"^\s*NAME\s*:", text, re.I):
             return "label"
+        captions += sum(
+            1 for key, _, _ in label_pairs(squeeze(text))
+            if key in PARTICIPANT_LABEL_KEYS
+        )
+    if captions >= MIN_CAPTIONS_FOR_LABEL:
+        return "label"
     if find_header_band(rows)[0] is not None:
         return "table"
     return None
@@ -1286,7 +1385,7 @@ def process_pdf(path, engine: str = DEFAULT_ENGINE):
         "Rows With Suspicious DOB": 0,
         "Rows Without Part ID": 0,
         "Rows With Non-SSN Part ID": 0,
-        "Unattached Name Fragments": 0,
+        "Unattached Fragments": 0,
         "Complete": "",
         "Error": "",
     }
@@ -1302,9 +1401,10 @@ def process_pdf(path, engine: str = DEFAULT_ENGINE):
                 continue
 
             layout = detect_layout(rows)
-            fragments = 0
             if layout == "label":
-                page_records, candidates = parse_label_page(rows, page_num, carry)
+                page_records, candidates, fragments = parse_label_page(
+                    rows, page_num, carry
+                )
             elif layout == "table":
                 colmap, header_index = build_column_map(rows)
                 if colmap:
@@ -1313,7 +1413,9 @@ def process_pdf(path, engine: str = DEFAULT_ENGINE):
                         rows, colmap, header_index, page_num, "table", carry
                     )
                 else:
-                    page_records, candidates = parse_pattern_rows(rows, page_num)
+                    page_records, candidates, fragments = parse_pattern_rows(
+                        rows, page_num
+                    )
             elif last_colmap is not None and any(
                 SSN_TOKEN_RE.match(w["text"]) for w in words
             ):
@@ -1330,7 +1432,7 @@ def process_pdf(path, engine: str = DEFAULT_ENGINE):
                 layouts.append(layout)
             all_records.extend(page_records)
             diag["Part IDs On Page"] += candidates
-            diag["Unattached Name Fragments"] += fragments
+            diag["Unattached Fragments"] += fragments
             # Carried forward so a participant split over the page break, or a
             # name that wrapped across it, can still be joined up.
             if page_records:
@@ -1362,7 +1464,7 @@ def process_pdf(path, engine: str = DEFAULT_ENGINE):
         and diag["Rows Written"] == diag["Part IDs On Page"] + diag["Rows Without Part ID"]
         and diag["Rows Missing Name"] == 0
         and diag["Rows With Suspicious DOB"] == 0
-        and diag["Unattached Name Fragments"] == 0
+        and diag["Unattached Fragments"] == 0
     ) else "CHECK"
     return rows_out, diag
 
@@ -1785,6 +1887,58 @@ def _build_test_pdf(dest: Path) -> Path:
     put(p9, 40, 212, "PART ID: 901234567")
     put(p9, 300, 212, "STATUS: Active")
 
+    # --- pages 10-12: a block cut short of its Status and Address -----------
+    # The participant at the foot of page 10 has a NAME and a PART ID, so the
+    # record looks finished -- but STATUS, ADDRESS and the remaining dates are
+    # on page 11. Page 11 prints no NAME: and no PART ID: anywhere, so it also
+    # tests that a page holding nothing but a tail is still read as a label
+    # page rather than skipped.
+    p10 = doc.new_page(width=792, height=612)
+    put(p10, 40, 60, "Distribution Tax Information Report")
+    put(p10, 40, 100, "NAME: BOSWELL, LYNN R")
+    put(p10, 300, 100, "DATE OF BIRTH: 07/07/1940")
+    put(p10, 40, 112, "PART ID: 555666777")
+    put(p10, 300, 112, "STATUS: Terminated")
+    put(p10, 40, 124, "ADDRESS: 20 SYNTHETIC AVE")
+    put(p10, 300, 124, "DATE OF HIRE:")
+    put(p10, 40, 136, "MADEUP, NC 200000000")
+    put(p10, 300, 136, "DIV/LOC:")
+    # cut short by the page break: no STATUS, no ADDRESS
+    put(p10, 40, 500, "NAME: CHANDLER, GERALD MOSES")
+    put(p10, 300, 500, "DATE OF BIRTH: 08/08/1942")
+    put(p10, 40, 512, "PART ID: 444555666")
+    put(p10, 300, 512, "DATE OF HIRE:")
+
+    p11 = doc.new_page(width=792, height=612)
+    put(p11, 40, 60, "Distribution Tax Information Report")
+    put(p11, 40, 80, "Activity for the Reporting Period: 01/01/2015 to 12/31/2015")
+    put(p11, 40, 120, "STATUS: Terminated")
+    put(p11, 300, 120, "DATE OF ENTRY:")
+    put(p11, 40, 132, "ADDRESS: 30 CONTINUED WAY")
+    put(p11, 300, 132, "DATE OF TERMINATION:")
+    put(p11, 40, 144, "NOWHERE, FL 300000000")
+    put(p11, 300, 144, "DATE OF REHIRE:")
+    put(p11, 300, 156, "DIV/LOC:")
+    put(p11, 40, 220, "TOTAL DISTRIBUTION AMOUNT   FEDERAL TAX AMOUNT WITHHELD")
+    # a tail further down the page: not at the top, so it is NOT joined to
+    # anyone. It is still written out, flagged that no name was given.
+    put(p11, 40, 320, "STATUS: Active")
+    put(p11, 300, 320, "ADDRESS: 99 ORPHAN LN")
+
+    p12 = doc.new_page(width=792, height=612)
+    put(p12, 40, 60, "NAME: VAUGHAN, PETER Q")
+    put(p12, 300, 60, "DATE OF BIRTH: 06/06/1946")
+    put(p12, 40, 72, "PART ID: 111222333")
+    put(p12, 300, 72, "STATUS: Terminated")
+
+    # --- page 13: an address stub and nothing else --------------------------
+    # "339223000" is a nine digit ZIP and matches the SSN pattern exactly. The
+    # page carries too few captions to read as a label page, so it falls to
+    # the inherited column map -- where the ZIP lands squarely in the Part ID
+    # column. It must not become a participant.
+    p13 = doc.new_page(width=792, height=612)
+    put(p13, 40, 130, "BOKEELIA, FL 339223000")
+
     doc.save(str(dest))
     doc.close()
     return dest
@@ -1826,9 +1980,15 @@ def selftest() -> int:
             by_id = {r["Part ID (SSN)"]: r for r in rows if r["Part ID (SSN)"]}
             by_name = {r["Name As Printed"]: r for r in rows}
 
-            check(f"{tag} row count", len(rows), 16)
+            check(f"{tag} row count", len(rows), 20)
             check(f"{tag} error", diag["Error"], "")
-            check(f"{tag} no stray fragments", diag["Unattached Name Fragments"], 0)
+            # one deliberate mid-page tail that joins nobody, plus the ZIP
+            # code on page 13 that must not become a participant
+            check(f"{tag} unattached counted", diag["Unattached Fragments"], 2)
+            check(f"{tag} zip not read as a participant",
+                  [r for r in rows if r["Page"] == 13], [])
+            check(f"{tag} zip not counted as a Part ID",
+                  "339-22-3000" in by_id, False)
 
             r = by_id.get("123-45-6789", {})
             check(f"{tag} table name", r.get("Name As Printed"),
@@ -1946,6 +2106,46 @@ def selftest() -> int:
             check(f"{tag} unmerged neighbour dob", r.get("Date Of Birth"),
                   "03/03/1966")
 
+            # --- a block cut short of its Status and Address ----------------
+            # The page-10 half has both a name and a Part ID, so it looks
+            # finished. It is not: the rest is on page 11.
+            r = by_id.get("444-55-5666", {})
+            check(f"{tag} cut block name", r.get("Name As Printed"),
+                  "CHANDLER, GERALD MOSES")
+            check(f"{tag} cut block dob", r.get("Date Of Birth"), "08/08/1942")
+            check(f"{tag} cut block status", r.get("Status"), "Terminated")
+            check(f"{tag} cut block address", r.get("Address"),
+                  "30 CONTINUED WAY, NOWHERE, FL 300000000")
+            check(f"{tag} cut block page", r.get("Page"), 10)
+            check(f"{tag} cut block flagged",
+                  "continued onto page 11" in r.get("Notes", ""), True)
+
+            # the complete participant above it must not have been touched
+            r = by_id.get("555-66-6777", {})
+            check(f"{tag} neighbour address", r.get("Address"),
+                  "20 SYNTHETIC AVE, MADEUP, NC 200000000")
+
+            # a tail part way down a page joins nobody, but is still written
+            # out with its Status and Address, flagged that no name was given
+            orphans = [r for r in rows if r["Page"] == 11]
+            check(f"{tag} mid-page tail written", len(orphans), 1)
+            r = orphans[0] if orphans else {}
+            check(f"{tag} mid-page tail address", r.get("Address"), "99 ORPHAN LN")
+            check(f"{tag} mid-page tail status", r.get("Status"), "Active")
+            check(f"{tag} mid-page tail no name", r.get("Name As Printed"), "")
+            check(f"{tag} mid-page tail flagged",
+                  NO_NAME_NOTE in r.get("Notes", ""), True)
+
+            # a page holding only a tail is still recognised as a label page
+            check(f"{tag} tail-only page read", "label" in diag["Layouts Seen"], True)
+
+            # and it must NOT have been swallowed by the next page's
+            # participant, whose Status conflicts with it
+            r = by_id.get("111-22-2333", {})
+            check(f"{tag} conflict refused", r.get("Address"), "")
+            check(f"{tag} conflict neighbour name", r.get("Name As Printed"),
+                  "VAUGHAN, PETER Q")
+
     if failures:
         print("SELFTEST FAILED")
         for f in failures:
@@ -1971,7 +2171,7 @@ def recon_summary(d) -> str:
         f"no-name={d['Rows Missing Name']} "
         f"no-dob={d['Rows Missing DOB']} "
         f"dob-suspect={d['Rows With Suspicious DOB']} "
-        f"fragments={d['Unattached Name Fragments']} {d['Error']}".rstrip()
+        f"fragments={d['Unattached Fragments']} {d['Error']}".rstrip()
     )
 
 
