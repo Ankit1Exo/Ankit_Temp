@@ -5,10 +5,16 @@ Combines every sheet of every Excel/CSV file in a folder into ONE table, even
 when the header row is not row 1.
 
 HOW THE HEADER ROW IS FOUND
-    Each sheet is scanned from row 1 down to row 30 (HEADER_SCAN_ROWS). The
-    first row that contains a cell reading "EmployeeName" is treated as that
-    sheet's header row; everything above it (PayDate, PeriodStart, PeriodEnd,
-    report titles, blank rows, ...) is discarded.
+    Each sheet is scanned from row 1 down to row 30 (HEADER_SCAN_ROWS). Every
+    row holding a cell that reads "EmployeeName" is a candidate; the candidate
+    with the MOST filled cells wins, and a tie goes to the LOWER row.
+    Everything above the winner (PayDate, PeriodStart, PeriodEnd, report
+    titles, blank rows, ...) is discarded.
+
+    Picking by width matters because some layouts print the report parameters
+    HORIZONTALLY - one row reading "EmployeeName | PeriodStart | PeriodEnd |
+    PayDate" - which also contains the word EmployeeName. That parameter row
+    is only a handful of cells wide, so the real header row beats it.
 
     Matching is LOOSE: case, spaces, underscores and punctuation are ignored,
     so EmployeeName / "Employee Name" / EMPLOYEE_NAME / "employee-name" all
@@ -18,6 +24,9 @@ HOW THE HEADER ROW IS FOUND
     If no such row is found in the first 30 rows, the sheet is SKIPPED and a
     line is written into the NOTES block at the bottom of the output table.
 
+    Use the "Diagnose headers" button to print the top rows of every sheet and
+    see exactly which row was chosen and which rivals it beat.
+
 HIDDEN DATA
     Nothing is filtered out on visibility. Hidden and very-hidden SHEETS,
     hidden ROWS and hidden COLUMNS are all read and combined - the effect is
@@ -25,12 +34,17 @@ HIDDEN DATA
     modified.
 
 COLUMN MATCHING
-    Header text is matched TRIMMED and CASE-INSENSITIVELY (internal runs of
-    whitespace are also collapsed). Columns that match line up under the same
-    output column; columns never seen before are appended at the RIGHT-HAND
-    END of the table. Sheets without a given column are left blank there.
-    Set IGNORE_PUNCTUATION_IN_MATCHING = True below if you also want
-    "SSN_SIN" and "SSN SIN" to be treated as the same column.
+    Header text is matched TRIMMED and CASE-INSENSITIVELY. Columns that match
+    line up under the same output column; columns never seen before are
+    appended at the RIGHT-HAND END of the table. Sheets without a given column
+    are left blank there. The first spelling seen becomes the output heading.
+
+    By default spacing and punctuation are ignored too, because these reports
+    use wrapped headers whose spacing drifts between exports - "AmountCurrent"
+    in one file and "Amount Current" in the next are the same column, as are
+    "SSN_SIN" / "SSN SIN" and "EmployeeNumber" / "Employee Number". Without
+    this you get near-duplicate columns side by side. Set
+    COLUMN_MATCH_IGNORES_SPACING = False for strict trim + case matching only.
 
     Duplicate headers inside the SAME sheet are kept apart as "Name",
     "Name (2)". A data column whose header cell is blank is named after its
@@ -95,14 +109,21 @@ from openpyxl.utils import get_column_letter
 # How far down each sheet to look for the header row.
 HEADER_SCAN_ROWS = 30
 
+# A candidate header row must hold at least this many filled cells. Stops a
+# one-off label such as a lone "EmployeeName:" caption from being mistaken for
+# the header row of the table.
+MIN_HEADER_CELLS = 2
+
 # A row is the header row when one of its cells matches (or starts with) one of
 # these keywords, after lowercasing and stripping every non-alphanumeric
 # character. Add alternates here if some files use a different label.
 HEADER_KEYWORDS = ("employeename",)
 
-# Column matching is always trimmed + case-insensitive + whitespace-collapsed.
-# Turn this on to ALSO ignore punctuation, i.e. treat "SSN_SIN" == "SSN SIN".
-IGNORE_PUNCTUATION_IN_MATCHING = False
+# Column matching is always trimmed and case-insensitive. Leaving this True
+# also ignores spaces, line breaks and punctuation, so a header that wraps as
+# "Amount Current" in one export and "AmountCurrent" in the next still lands in
+# one column. Set it to False for strict trim + case matching only.
+COLUMN_MATCH_IGNORES_SPACING = True
 
 # Every spelling of the employee-name header is written into this one column.
 EMPLOYEE_COLUMN_NAME = "EmployeeName"
@@ -138,11 +159,13 @@ def keyword_key(value):
 
 
 def match_key(header_text):
-    """Key used to line columns up across sheets: trimmed, whitespace-collapsed,
-    lowercased (and punctuation-stripped when IGNORE_PUNCTUATION_IN_MATCHING)."""
+    """Key used to line columns up across sheets: trimmed and lowercased, with
+    spacing and punctuation dropped as well unless strict matching is asked
+    for. Header cells in these reports wrap, so "Amount Current" and
+    "AmountCurrent" have to reach the same key."""
     text = "" if header_text is None else str(header_text)
-    if IGNORE_PUNCTUATION_IN_MATCHING:
-        text = re.sub(r"[^A-Za-z0-9]+", " ", text)
+    if COLUMN_MATCH_IGNORES_SPACING:
+        return re.sub(r"[^a-z0-9]+", "", text.lower())
     return " ".join(text.split()).lower()
 
 
@@ -295,14 +318,44 @@ def read_any(path, notes, log):
 # Turning one sheet into a header + data block
 # ---------------------------------------------------------------------------
 
+def header_candidates(rows):
+    """Every row in the scan window that could be the header row, as a list of
+    (row_number, filled_cell_count), row_number being 1-based."""
+    found = []
+    for index in range(min(len(rows), HEADER_SCAN_ROWS)):
+        row = rows[index]
+        if not row_is_header(row):
+            continue
+        filled = sum(1 for value in row if not is_blank(value))
+        if filled < MIN_HEADER_CELLS:
+            continue
+        found.append((index + 1, filled))
+    return found
+
+
+def choose_header_row(rows):
+    """Pick the best candidate: widest row wins, ties go to the lower row.
+
+    A horizontally printed parameter block ("EmployeeName | PeriodStart |
+    PeriodEnd | PayDate") also contains the keyword but is only a few cells
+    wide, so the real header row - which spans every column of the table -
+    outscores it. Returns the 1-based row number, or None."""
+    found = header_candidates(rows)
+    if not found:
+        return None
+    best = max(found, key=lambda item: (item[1], item[0]))
+    return best[0]
+
+
 def split_header_and_data(rows):
-    """Return (header_row, data_rows) or (None, None) when no EmployeeName row
-    is present in the first HEADER_SCAN_ROWS rows."""
-    limit = min(len(rows), HEADER_SCAN_ROWS)
-    for index in range(limit):
-        if row_is_header(rows[index]):
-            return rows[index], rows[index + 1:]
-    return None, None
+    """Return (header_row, data_rows, chosen_row_number, candidates).
+    header_row is None when no usable EmployeeName row exists in the first
+    HEADER_SCAN_ROWS rows."""
+    found = header_candidates(rows)
+    chosen = choose_header_row(rows)
+    if chosen is None:
+        return None, None, None, found
+    return rows[chosen - 1], rows[chosen:], chosen, found
 
 
 def build_column_names(header_row, data_rows):
@@ -437,7 +490,7 @@ def combine(source_folder, dest_path, include_subfolders, log, progress, status=
                 log(f"  - [{sheet_name}]{hidden_tag}: blank sheet, skipped")
                 continue
 
-            header_row, data_rows = split_header_and_data(rows)
+            header_row, data_rows, chosen, candidates = split_header_and_data(rows)
             if header_row is None:
                 message = (
                     f"{label} [{sheet_name}]: EmployeeName column not found in "
@@ -446,6 +499,10 @@ def combine(source_folder, dest_path, include_subfolders, log, progress, status=
                 log(f"  ! {message}")
                 notes.append(message)
                 continue
+
+            if len(candidates) > 1:
+                rivals = ", ".join(f"row {r} ({n} cells)" for r, n in candidates if r != chosen)
+                log(f"    (header row {chosen} chosen over {rivals})")
 
             data_rows = [r for r in data_rows if not row_is_blank(r)]
             if not data_rows:
@@ -479,7 +536,7 @@ def combine(source_folder, dest_path, include_subfolders, log, progress, status=
             sheets_combined += 1
 
             note = f" | {len(new_columns)} new column(s): {', '.join(new_columns)}" if new_columns else ""
-            log(f"  - [{sheet_name}]{hidden_tag}: header row found, "
+            log(f"  - [{sheet_name}]{hidden_tag}: header on row {chosen}, "
                 f"{len(trimmed)} row(s), {len(names)} column(s){note}")
 
         progress(file_index, len(files))
@@ -507,6 +564,80 @@ def combine(source_folder, dest_path, include_subfolders, log, progress, status=
     progress(len(files), len(files))
     say("Done.")
     return written, total_rows, len(column_order), notes
+
+
+# ---------------------------------------------------------------------------
+# Diagnose - why a given sheet picked the header row it picked
+# ---------------------------------------------------------------------------
+
+DIAGNOSE_CELL_WIDTH = 22
+DIAGNOSE_MAX_CELLS = 14
+
+
+def diagnose(source_folder, include_subfolders, log, progress, status=None):
+    """Print the top rows of every sheet, flagging the candidate header rows
+    and the winner, without writing any output file. Everything stays in this
+    window on this machine - nothing is saved or sent anywhere."""
+    def say(message):
+        if status:
+            status(message)
+
+    if not os.path.isdir(source_folder):
+        raise ValueError(f"Source folder not found: {source_folder}")
+
+    files = collect_files(source_folder, include_subfolders, set())
+    if not files:
+        raise ValueError("No supported files found in the source folder")
+
+    progress(0, len(files))
+    log(f"Header diagnostic - first {HEADER_SCAN_ROWS} rows of each sheet.")
+    log("  >> = chosen header row   ?  = candidate that lost")
+    log("")
+
+    notes = []
+    for file_index, full_path in enumerate(files, start=1):
+        label = (
+            os.path.relpath(full_path, source_folder) if include_subfolders
+            else os.path.basename(full_path)
+        )
+        say(f"Scanning {label} ...")
+        log(f"=== {label}")
+
+        try:
+            sheets = list(read_any(full_path, notes, log))
+        except Exception as exc:
+            log(f"  ! could not be opened - {exc}")
+            progress(file_index, len(files))
+            continue
+
+        for sheet_name, rows, hidden in sheets:
+            hidden_tag = " (hidden sheet)" if hidden else ""
+            chosen = choose_header_row(rows)
+            candidates = {row for row, _ in header_candidates(rows)}
+
+            if chosen is None:
+                log(f"  --- [{sheet_name}]{hidden_tag}: NO EmployeeName row in the "
+                    f"first {HEADER_SCAN_ROWS} rows -> sheet would be skipped")
+            else:
+                log(f"  --- [{sheet_name}]{hidden_tag}: header row {chosen}")
+
+            for index in range(min(len(rows), HEADER_SCAN_ROWS)):
+                row = rows[index]
+                number = index + 1
+                filled = sum(1 for value in row if not is_blank(value))
+                cells = [
+                    str(value).strip()[:DIAGNOSE_CELL_WIDTH]
+                    for value in row if not is_blank(value)
+                ][:DIAGNOSE_MAX_CELLS]
+                more = "" if filled <= DIAGNOSE_MAX_CELLS else f" ... (+{filled - DIAGNOSE_MAX_CELLS})"
+                mark = ">>" if number == chosen else ("? " if number in candidates else "  ")
+                log(f"    {mark} row {number:>2} [{filled:>3} cells] {' | '.join(cells)}{more}")
+            log("")
+
+        progress(file_index, len(files))
+
+    say("Diagnostic complete.")
+    log("Diagnostic complete - no files were written.")
 
 
 # ---------------------------------------------------------------------------
@@ -677,8 +808,14 @@ class CombinerApp:
             fg="#444", wraplength=730, justify="left",
         ).pack(fill="x", padx=8)
 
-        self.run_button = tk.Button(root, text="Run", width=20, command=self.on_run)
-        self.run_button.pack(pady=10)
+        buttons = tk.Frame(root)
+        buttons.pack(pady=10)
+        self.run_button = tk.Button(buttons, text="Run", width=20, command=self.on_run)
+        self.run_button.pack(side="left", padx=4)
+        self.diagnose_button = tk.Button(
+            buttons, text="Diagnose headers", width=20, command=self.on_diagnose
+        )
+        self.diagnose_button.pack(side="left", padx=4)
 
         bar = tk.Frame(root)
         bar.pack(fill="x", padx=8)
@@ -730,23 +867,46 @@ class CombinerApp:
     def status(self, message):
         self.root.after(0, lambda: self.status_var.set(message))
 
+    def _start(self, target, args):
+        self.run_button.configure(state="disabled")
+        self.diagnose_button.configure(state="disabled")
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+        self.progress(0, 0)
+        self.status("Starting ...")
+        threading.Thread(target=target, args=args, daemon=True).start()
+
+    def _finish(self):
+        self.run_button.configure(state="normal")
+        self.diagnose_button.configure(state="normal")
+
     def on_run(self):
         source = self.source_var.get().strip()
         dest = self.dest_var.get().strip()
         if not source or not dest:
             messagebox.showerror("Missing path", "Pick both a source folder and an output file.")
             return
+        self._start(self._worker, (source, dest, self.subfolders_var.get()))
 
-        self.run_button.configure(state="disabled")
-        self.log_box.configure(state="normal")
-        self.log_box.delete("1.0", "end")
-        self.log_box.configure(state="disabled")
-        self.progress(0, 0)
-        self.status("Starting ...")
+    def on_diagnose(self):
+        source = self.source_var.get().strip()
+        if not source:
+            messagebox.showerror("Missing path", "Pick a source folder first.")
+            return
+        self._start(self._diagnose_worker, (source, self.subfolders_var.get()))
 
-        threading.Thread(
-            target=self._worker, args=(source, dest, self.subfolders_var.get()), daemon=True
-        ).start()
+    def _diagnose_worker(self, source, include_subfolders):
+        try:
+            diagnose(source, include_subfolders, self.log, self.progress, status=self.status)
+        except Exception as exc:
+            message = str(exc)
+            self.status(f"Failed: {message}")
+            self.log("ERROR: " + message)
+            self.log(traceback.format_exc())
+            self.root.after(0, lambda: messagebox.showerror("Error", message))
+        finally:
+            self.root.after(0, self._finish)
 
     def _worker(self, source, dest, include_subfolders):
         try:
@@ -775,7 +935,7 @@ class CombinerApp:
             self.log(traceback.format_exc())
             self.root.after(0, lambda: messagebox.showerror("Error", message))
         finally:
-            self.root.after(0, lambda: self.run_button.configure(state="normal"))
+            self.root.after(0, self._finish)
 
 
 def main():
