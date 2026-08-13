@@ -283,18 +283,51 @@ def _with_install_hint(exc):
     return f"{exc} -> {hint}"
 
 
+def to_raw_frame(frame):
+    """Normalise a frame that already has headers into the headerless
+    form the rest of the pipeline expects, pushing the header names back
+    down into row 0 so header detection sees them."""
+    width = frame.shape[1]
+    if isinstance(frame.columns, pd.MultiIndex):
+        names = [
+            " ".join(
+                dict.fromkeys(
+                    str(p).strip() for p in col
+                    if not pd.isna(p) and not str(p).startswith("Unnamed:")
+                )
+            )
+            for col in frame.columns
+        ]
+    else:
+        names = [str(c) for c in frame.columns]
+
+    body = pd.DataFrame(frame.to_numpy(), columns=range(width))
+    if isinstance(frame.columns, pd.RangeIndex):
+        return body
+    header = pd.DataFrame([names], columns=range(width))
+    return pd.concat([header, body], ignore_index=True)
+
+
 def read_html_tables(file_path):
-    """Fallback for .xls files that are really HTML tables (a very common
-    export format from web reporting tools)."""
-    for encoding in TEXT_ENCODINGS:
+    """Fallback for files that are really HTML tables - a very common
+    export format from web reporting tools, usually named .xls."""
+    attempts = [{}] + [{"encoding": enc} for enc in TEXT_ENCODINGS]
+    last_error = None
+    for kwargs in attempts:
         try:
-            tables = pd.read_html(file_path, header=None, encoding=encoding)
-        except ImportError as exc:
-            raise ImportError(str(exc))
-        except Exception:
+            tables = pd.read_html(file_path, **kwargs)
+        except ImportError:
+            raise
+        except Exception as exc:
+            last_error = exc
             continue
         if tables:
-            return [(f"Table{i + 1}", t) for i, t in enumerate(tables)]
+            return [
+                (f"Table{i + 1}", to_raw_frame(t))
+                for i, t in enumerate(tables)
+            ]
+    if last_error:
+        raise last_error
     return []
 
 
@@ -372,11 +405,63 @@ def read_text_file(file_path, ext):
     raise last_error if last_error else ValueError("could not read text file")
 
 
-def open_excel_file(file_path, ext, log):
-    """Open a workbook with the first engine that works. Returns an
+def sniff_format(file_path):
+    """What a file actually is, judged by its first bytes rather than by
+    its extension. Files named .xls are routinely OLE2 workbooks, zipped
+    .xlsx workbooks, HTML tables or plain delimited text - the extension
+    alone is not something to trust."""
+    try:
+        with open(file_path, "rb") as fh:
+            head = fh.read(8192)
+    except Exception:
+        return "unknown"
+
+    if not head:
+        return "empty"
+    if head[:4] == b"PK\x03\x04":
+        return "zip"                       # xlsx / xlsm / xlsb / ods
+    if head[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return "ole2"                      # legacy xls (and old xlsb)
+
+    sample = head.decode("latin-1", "ignore")
+    lowered = sample.lstrip().lower()
+    if lowered.startswith(("<!doctype", "<html", "<table", "<?xml")) \
+            or "<table" in lowered[:4096]:
+        return "html"
+    if b"\x00" in head[:1024]:
+        return "binary"
+    return "text"
+
+
+# Engines worth trying for each detected container format, in order.
+FORMAT_ENGINES = {
+    "zip": ["openpyxl", "calamine", "pyxlsb", "odf"],
+    "ole2": ["xlrd", "calamine"],
+    "binary": ["calamine", "xlrd", "openpyxl", "pyxlsb"],
+    "unknown": ["calamine", "openpyxl", "xlrd", "pyxlsb", "odf"],
+}
+
+
+def engines_for(file_path, ext):
+    """Engine order for a file: what its content says it is, with the
+    extension's preferred engine promoted to the front when the two
+    agree, then anything else as a backstop."""
+    fmt = sniff_format(file_path)
+    ordered = list(FORMAT_ENGINES.get(fmt, []))
+    for engine in ENGINE_CHAIN.get(ext, []):
+        if engine in ordered:
+            ordered.remove(engine)
+            ordered.insert(0, engine)
+    if not ordered:
+        ordered = ["openpyxl", "calamine", "xlrd", "pyxlsb", "odf"]
+    return fmt, ordered
+
+
+def open_excel_file(file_path, engines, log):
+    """Open a workbook with the first engine that works. Returns a
     pd.ExcelFile, or None if every engine failed (already logged)."""
     errors = []
-    for engine in ENGINE_CHAIN.get(ext, ["openpyxl"]):
+    for engine in engines:
         try:
             return pd.ExcelFile(file_path, engine=engine)
         except Exception as exc:
@@ -387,18 +472,38 @@ def open_excel_file(file_path, ext, log):
 
 
 def load_raw_sheets(file_path, ext, log):
-    """Yield (sheet_name, headerless DataFrame) for any supported file."""
-    if ext in TEXT_EXTS:
-        return [("CSV" if ext == ".csv" else "Text", read_text_file(file_path, ext))]
+    """Yield (sheet_name, headerless DataFrame) for any supported file,
+    routed by what the file actually contains."""
+    fmt, engines = engines_for(file_path, ext)
 
-    book = open_excel_file(file_path, ext, log)
+    if fmt == "empty":
+        return [("Sheet1", pd.DataFrame())]
+
+    if fmt == "text":
+        label = "CSV" if ext == ".csv" else "Text"
+        if ext not in TEXT_EXTS:
+            log(f"      not a workbook - reading as delimited text")
+        return [(label, read_text_file(file_path, ext))]
+
+    if fmt == "html":
+        tables = read_html_tables(file_path)
+        if tables:
+            log(f"      not a workbook - recovered {len(tables)} HTML table(s)")
+            return tables
+        raise ValueError("HTML file contained no readable tables")
+
+    book = open_excel_file(file_path, engines, log)
     if book is None:
-        if ext == ".xls":
-            # Last resort: HTML masquerading as .xls.
-            tables = read_html_tables(file_path)
-            if tables:
-                log("      recovered as HTML table(s)")
-                return tables
+        # Content sniffing can still be fooled (e.g. an HTML export with
+        # leading junk), so try the other readers before giving up.
+        for fallback in (read_html_tables, lambda p: [("Text", read_text_file(p, ext))]):
+            try:
+                recovered = fallback(file_path)
+            except Exception:
+                continue
+            if recovered and not all(f.empty for _n, f in recovered):
+                log("      recovered via fallback reader")
+                return recovered
         raise ValueError("no engine could open this file (see attempts above)")
 
     sheets = []
@@ -420,11 +525,12 @@ def load_raw_sheets(file_path, ext, log):
 # Pivot table detection
 # --------------------------------------------------------------------------
 
-def find_pivot_sheets(file_path, ext):
-    """Sheet names in an .xlsx/.xlsm workbook holding a PivotTable, so
-    only those sheets get skipped. Other formats return an empty set
+def find_pivot_sheets(file_path):
+    """Sheet names in an OOXML workbook holding a PivotTable, so only
+    those sheets get skipped. Judged by content, so a zipped workbook
+    named .xls is still inspected. Other formats return an empty set
     (openpyxl can't inspect them), i.e. nothing is excluded."""
-    if ext not in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+    if sniff_format(file_path) != "zip":
         return set()
     try:
         wb = openpyxl.load_workbook(file_path, read_only=False, data_only=True)
@@ -552,7 +658,7 @@ def combine_files(source_folder, dest_path, log, progress, status=None,
             progress(file_idx, total_files)
             continue
 
-        pivot_sheets = find_pivot_sheets(file_path, ext) if skip_pivots else set()
+        pivot_sheets = find_pivot_sheets(file_path) if skip_pivots else set()
 
         for sheet_name, raw in raw_sheets:
             if sheet_name in pivot_sheets:
