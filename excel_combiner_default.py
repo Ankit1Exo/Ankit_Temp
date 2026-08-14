@@ -184,45 +184,82 @@ def _looks_numeric(value):
         return False
 
 
-def detect_header_row(raw, max_scan=25):
+def _filled_columns(frame, min_hits=1):
+    """Column positions holding at least min_hits real values.
+
+    min_hits > 1 keeps a one-off note parked in a far-right column from
+    counting as a data column - report exports collect stray comments
+    like that, and a single cell should not define the table's shape."""
+    filled = set()
+    for pos in range(frame.shape[1]):
+        hits = 0
+        for value in frame.iloc[:, pos]:
+            if not pd.isna(value) and str(value).strip():
+                hits += 1
+                if hits >= min_hits:
+                    filled.add(pos)
+                    break
+    return filled
+
+
+def detect_header_row(raw, max_scan=40, look_ahead=40):
     """Index of the most header-like row in a headerless frame.
 
-    Scores each candidate on how full it is, how text-like its values
-    are, and how unique they are; requires at least one non-empty row
-    beneath it. Returns 0 when nothing scores well, which reproduces
-    pandas' normal 'first row is the header' behaviour."""
+    The decisive test is *coverage*: a real header labels the columns
+    that the data below actually occupies. Measuring fullness against
+    the sheet's total width instead fails on report exports, where a
+    6-column header sitting in a 24-column sheet scores no better than
+    a 3-cell 'PeriodStart / PeriodEnd / PayDate' parameter line above it.
+
+    Returns 0 when nothing scores well, which reproduces pandas' normal
+    'first row is the header' behaviour."""
     if raw.empty:
         return 0
 
-    n_cols = max(raw.shape[1], 1)
-    best_idx, best_score = 0, 0.0
+    scores = {}
 
     for i in range(min(max_scan, len(raw))):
-        values = [
-            str(v).strip()
-            for v in raw.iloc[i].tolist()
+        row = raw.iloc[i]
+        labelled = {
+            pos for pos, v in enumerate(row)
             if not pd.isna(v) and str(v).strip()
-        ]
-        if not values:
-            continue
-        # A header needs data under it.
-        below = raw.iloc[i + 1:i + 4]
-        if below.empty or below.notna().sum().sum() == 0:
+        }
+        if not labelled:
             continue
 
-        filled = len(values) / n_cols
+        below = raw.iloc[i + 1:i + 1 + look_ahead]
+        if below.empty:
+            continue
+        data_cols = _filled_columns(below, min_hits=1 if len(below) <= 2 else 2)
+        if not data_cols:
+            continue
+
+        values = [str(v).strip() for v in row.tolist()
+                  if not pd.isna(v) and str(v).strip()]
+
+        # How much of the data footprint this row actually labels.
+        coverage = len(labelled & data_cols) / len(data_cols)
+        # Labels standing over columns that hold no data - a title or
+        # parameter line scores badly here, a real header rarely does.
+        stray = len(labelled - data_cols) / len(labelled)
         textual = sum(1 for v in values if not _looks_numeric(v)) / len(values)
         unique = len({v.lower() for v in values}) / len(values)
         short = sum(1 for v in values if len(v) <= 60) / len(values)
 
-        score = filled * 0.40 + textual * 0.30 + unique * 0.20 + short * 0.10
-        # Prefer earlier rows when scores are close.
-        score -= i * 0.005
+        scores[i] = (coverage * 0.45 + textual * 0.20 + unique * 0.15
+                     + short * 0.10 + (1 - stray) * 0.10)
 
-        if score > best_score:
-            best_score, best_idx = score, i
+    if not scores:
+        return 0
+    best_score = max(scores.values())
+    if best_score < 0.55:
+        return 0
 
-    return best_idx if best_score >= 0.55 else 0
+    # A header always precedes its data, and a well-formed data row can
+    # score as highly as the header above it. So among rows that score
+    # near the top, take the earliest - that is the header, and the
+    # look-alikes beneath it are its own data.
+    return min(i for i, s in scores.items() if s >= best_score - 0.06)
 
 
 def frame_from_raw(raw, detect_headers):
