@@ -138,104 +138,23 @@ SET
         WHEN t.[Passport Country] IS NOT NULL AND LTRIM(RTRIM(t.[Passport Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Passport Country]))) <> N'null'
         THEN s.[Passport_Country] ELSE t.[Passport Country] END,
     t.[Government ID Issuing Country] = CASE
-        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing Country]))) <> N'null'
-        THEN s.[Government_ID_Issuing_Country] ELSE t.[Government ID Issuing Country] END,
-    t.[Government- Issued Identification] = CASE
-        WHEN t.[Government- Issued Identification] IS NOT NULL AND LTRIM(RTRIM(t.[Government- Issued Identification])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government- Issued Identification]))) <> N'null'
-        THEN s.[Government_Issued_Identification] ELSE t.[Government- Issued Identification] END,
-    t.[Health Related Information] = CASE
-        WHEN t.[Health Related Information] IS NOT NULL AND LTRIM(RTRIM(t.[Health Related Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Health Related Information]))) <> N'null'
-        THEN s.[Health_Related_Information] ELSE t.[Health Related Information] END,
-    t.[Family Information] = CASE
-        WHEN t.[Family Information] IS NOT NULL AND LTRIM(RTRIM(t.[Family Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Family Information]))) <> N'null'
-        THEN s.[Family_Information] ELSE t.[Family Information] END,
-    t.[Financial Account Information] = CASE
-        WHEN t.[Financial Account Information] IS NOT NULL AND LTRIM(RTRIM(t.[Financial Account Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Financial Account Information]))) <> N'null'
-        THEN s.[Financial_Account_Information] ELSE t.[Financial Account Information] END,
-    t.[Demographic Information] = CASE
-        WHEN t.[Demographic Information] IS NOT NULL AND LTRIM(RTRIM(t.[Demographic Information])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Demographic Information]))) <> N'null'
-        THEN s.[Demographic_Information] ELSE t.[Demographic Information] END,
-    t.[Biometric Data] = CASE
-        WHEN t.[Biometric Data] IS NOT NULL AND LTRIM(RTRIM(t.[Biometric Data])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Biometric Data]))) <> N'null'
-        THEN s.[Biometric_Data] ELSE t.[Biometric Data] END,
-    t.[PI Notes] = CASE
-        WHEN t.[PI Notes] IS NOT NULL AND LTRIM(RTRIM(t.[PI Notes])) <> N'' AND LOWER(LTRIM(RTRIM(t.[PI Notes]))) <> N'null'
-        THEN s.[PI_Notes] ELSE t.[PI Notes] END,
-    t.[Access Credentials (Non-Financial Account)] = CASE
-        WHEN t.[Access Credentials (Non-Financial Account)] IS NOT NULL AND LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Access Credentials (Non-Financial Account)]))) <> N'null'
-        THEN s.[Access_Credentials_Non_Financial_Account] ELSE t.[Access Credentials (Non-Financial Account)] END
-FROM [Ankit_STS].[dbo].[sts_master_dedup_v2] t
-JOIN #src s ON s.ssn_key = t.ssn_key
-WHERE t.ssn_key <> '';
-
-SELECT @@ROWCOUNT AS rows_updated;
--- ROLLBACK TRAN;   /   COMMIT TRAN;
+        WHEN t.[Government ID Issuing Country] IS NOT NULL AND LTRIM(RTRIM(t.[Government ID Issuing Country])) <> N'' AND LOWER(LTRIM(RTRIM(t.[Government ID Issuing 
 
 
 
-SELECT TOP (1000) [Doc ID]
-      ,[First Name]
-      ,[Middle Name]
-      ,[Last Name]
-      ,[Suffix]
-      ,[Entity Type_Patient]
-      ,[Entity Type_Employee]
-      ,[Entity Type_Other]
-      ,[Is Minor]
-      ,[Is Deceased]
-      ,[Street Address]
-      ,[City]
-      ,[State]
-      ,[Zip Code]
-      ,[International Street Address]
-      ,[International City]
-      ,[International State/Province]
-      ,[Postal Code]
-      ,[Country]
-      ,[Email Address]
-      ,[Phone Number]
-      ,[Date of Birth]
-      ,[Social Security Number (SSN)]
-      ,[Individual Taxpayer Identification Number (ITIN)]
-      ,[Driver's License Number]
-      ,[Tax IP PIN]
-      ,[Other Government ID Number]
-      ,[Passport Number]
-      ,[State ID Number]
-      ,[Student ID Number (CO, WA, DC)]
-      ,[Employee ID and Password (ND,SD)]
-      ,[Fin Acct Number ONLY]
-      ,[Fin Acct Number WITH Access]
-      ,[Fin Acct Number Last Four Digits]
-      ,[Payment Card Number ONLY]
-      ,[Payment Card WITH Access]
-      ,[Payment Card Number Last Four Digits]
-      ,[Username/Email Address and Password for Non-Fin Acc]
-      ,[Username/Email Address and Password for Fin Acc]
-      ,[Diagnosis/Diagnosis Code]
-      ,[Health Insurance Individual Policy Number]
-      ,[Medical History/Treatment/Condition/Prescription]
-      ,[Hospital Unit/Physician Name]
-      ,[Date of Service]
-      ,[Medical Record Number (MRN)]
-      ,[Patient ID]
-      ,[Patient Account Number (PAN)]
-      ,[Other Unique Health Identifier]
-      ,[Medicare/Medicaid Number]
-      ,[Patient Personal Representative]
-      ,[Referral]
-      ,[Biometric Identifiers]
-      ,[Digital Cryptographic Signatures (AZ, NC, ND, WA)]
-      ,[Certificate/License Number]
-      ,[DNA Profile]
-      ,[Full Face Photo]
-      ,[IP Address]
-      ,[Medical Device Identifier]
-      ,[URL]
-      ,[Vehicle ID Number]
-      ,[Birth OR Marriage Certificate (WY)]
-      ,[General Tax Info]
-      ,[Parent's Birth Name (ND, NC)]
-      ,[Work-Related Evaluations (PR)]
-      ,[Column_65]
-  FROM [CHS].[dbo].[260820_AM_merged_excel_data]
+
+SELECT
+    [Doc ID],
+    [First Name],
+    [Middle Name],
+    [Last Name],
+    [Suffix],
+    CASE WHEN [First Name]  LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS FN_bad,
+    CASE WHEN [Middle Name] LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS MN_bad,
+    CASE WHEN [Last Name]   LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS LN_bad,
+    CASE WHEN [Suffix]      LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS SFX_bad
+FROM [CHS].[dbo].[260820_AM_merged_excel_data]
+WHERE [First Name]  LIKE '%[^a-zA-Z ]%'
+   OR [Middle Name] LIKE '%[^a-zA-Z ]%'
+   OR [Last Name]   LIKE '%[^a-zA-Z ]%'
+   OR [Suffix]      LIKE '%[^a-zA-Z ]%';
