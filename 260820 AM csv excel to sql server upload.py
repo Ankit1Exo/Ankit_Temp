@@ -1,10 +1,11 @@
 """
-CSV / Excel  ->  SQL Server uploader  (Windows Authentication)
+CSV / Excel  ->  SQL Server uploader
 
 What it does
 ------------
 * Pick a .csv, .xlsx, .xlsm or .xls file with a file dialog.
 * Type the server, database, schema and table name.
+* Connect with a SQL Server login or with Windows authentication.
 * If the table does not exist it is CREATED with every column as NVARCHAR(MAX).
 * The table is TRUNCATED, then every row of the file is inserted as text.
   Whatever the source data type is (number, date, boolean, text) it is
@@ -22,13 +23,17 @@ Requirements
 
 Run it: open in IDLE and press F5, or double-click. No arguments needed.
 
-Security note: this uses your own Windows login. It never asks for,
-stores or writes out a password.
+Security note: a password typed into the window is held in memory for the
+duration of the connection only. It is never written to disk, never put in
+the log window, and is stripped out of any error text that is displayed.
+Prefer a named SQL login with rights to just this one database over a
+shared administrative account.
 """
 
 import csv
 import os
 import queue
+import re
 import threading
 import traceback
 from datetime import date, datetime, time as dtime
@@ -37,7 +42,7 @@ from decimal import Decimal
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_TITLE = "CSV / Excel  ->  SQL Server uploader (Windows auth)"
+APP_TITLE = "CSV / Excel  ->  SQL Server uploader"
 BATCH_SIZE = 1000
 CSV_EXT = {".csv", ".txt", ".tsv"}
 XLSX_EXT = {".xlsx", ".xlsm"}
@@ -51,6 +56,9 @@ DELIMITERS = {
     "Pipe  |": "|",
 }
 ENCODINGS = ["Auto detect", "utf-8-sig", "utf-8", "cp1252", "latin-1", "utf-16"]
+
+# Masks PWD=... / PASSWORD=... in anything on its way to the log window.
+PASSWORD_PATTERN = re.compile(r"((?:PWD|PASSWORD)\s*=\s*)(\{[^}]*\}|[^;]*)", re.IGNORECASE)
 
 
 # --------------------------------------------------------------------------
@@ -256,24 +264,62 @@ def pick_driver(pyodbc):
     )
 
 
-def build_connection_string(server, database, driver):
+def scrub(text, password=None):
+    """Remove any password from text before it is logged or shown."""
+    text = str(text)
+    if password:
+        text = text.replace(password, "***")
+    return PASSWORD_PATTERN.sub(r"\1***", text)
+
+
+def odbc_value(value):
+    """Brace-quote a connection-string value so ; = { } inside it are safe."""
+    return "{%s}" % str(value).replace("}", "}}")
+
+
+def build_connection_string(server, database, driver, username=None, password=None):
+    """Windows auth when username is empty, otherwise a SQL Server login."""
     parts = [
         "DRIVER={%s}" % driver,
         "SERVER=%s" % server,
         "DATABASE=%s" % database,
-        "Trusted_Connection=yes",
-        "APP=CSV Excel uploader",
     ]
+    if username:
+        parts.append("UID=%s" % odbc_value(username))
+        parts.append("PWD=%s" % odbc_value(password or ""))
+    else:
+        parts.append("Trusted_Connection=yes")
+    parts.append("APP=CSV Excel uploader")
     if "18" in driver or "17" in driver:
         # Driver 18 encrypts by default; without this a self-signed cert fails.
         parts.append("TrustServerCertificate=yes")
     return ";".join(parts) + ";"
 
 
-def connect(server, database, driver):
+def connect(server, database, driver, username=None, password=None):
     import pyodbc
-    return pyodbc.connect(build_connection_string(server, database, driver),
-                          autocommit=False, timeout=30)
+    return pyodbc.connect(
+        build_connection_string(server, database, driver, username, password),
+        autocommit=False, timeout=30)
+
+
+def explain_login_error(error, username):
+    """Add a plain-English hint to the ODBC message for common login failures."""
+    text = str(error)
+    if "18456" in text:
+        who = "SQL login '%s'" % username if username else "your Windows account"
+        return (text + "\n\n"
+                "Login failed (18456). The server rejected %s.\n\n"
+                "Check that:\n"
+                "  * the authentication mode above matches how you connect in SSMS\n"
+                "    (if SSMS shows a name in brackets on the tab, that is a SQL login)\n"
+                "  * the login exists on this server and the password is correct\n"
+                "  * that login is mapped to this database as a user" % who)
+    if "4060" in text:
+        return text + "\n\nThe login is valid but has no access to that database (4060)."
+    if "17" in text and "server was not found" in text.lower():
+        return text + "\n\nThe server name could not be reached. Check the name/instance."
+    return text
 
 
 def fetch_table_columns(cursor, schema, table):
@@ -349,7 +395,8 @@ class UploadWorker(threading.Thread):
             self.messages.put(("max", len(payload)))
 
             self.say("Connecting to %s / %s ..." % (plan["server"], plan["database"]))
-            connection = connect(plan["server"], plan["database"], plan["driver"])
+            connection = connect(plan["server"], plan["database"], plan["driver"],
+                                 plan["username"], plan["password"])
             cursor = connection.cursor()
 
             full_name = "%s.%s" % (bracket(plan["schema"]), bracket(plan["table"]))
@@ -398,9 +445,10 @@ class UploadWorker(threading.Thread):
                     self.say("Rolled back - the table is unchanged.")
                 except Exception:
                     pass
-            detail = str(error).strip() or error.__class__.__name__
+            password = self.plan.get("password")
+            detail = scrub(str(error).strip() or error.__class__.__name__, password)
             self.messages.put(("log", "ERROR: " + detail))
-            self.messages.put(("trace", traceback.format_exc()))
+            self.messages.put(("trace", scrub(traceback.format_exc(), password)))
             self.messages.put(("done", False, detail))
         finally:
             if connection is not None:
@@ -470,6 +518,9 @@ class UploaderApp:
         self.encoding_var = tk.StringVar(value="Auto detect")
         self.server_var = tk.StringVar()
         self.database_var = tk.StringVar()
+        self.auth_var = tk.StringVar(value="sql")        # "windows" or "sql"
+        self.username_var = tk.StringVar()
+        self.password_var = tk.StringVar()
         self.schema_var = tk.StringVar(value="dbo")
         self.table_var = tk.StringVar()
         self.trim_var = tk.BooleanVar(value=True)
@@ -482,6 +533,7 @@ class UploaderApp:
 
         self._build_widgets()
         self._toggle_source_fields()
+        self._toggle_auth_fields()
         self.root.after(120, self._drain_messages)
 
     # ---------------- layout ----------------
@@ -513,8 +565,7 @@ class UploaderApp:
                                          state="readonly", values=ENCODINGS)
         self.encoding_box.pack(side="left", padx=6)
 
-        target = ttk.LabelFrame(
-            self.root, text="2.  SQL Server destination  (Windows authentication)")
+        target = ttk.LabelFrame(self.root, text="2.  SQL Server destination")
         target.pack(fill="x", **padding)
         target.columnconfigure(1, weight=1)
         target.columnconfigure(3, weight=1)
@@ -531,8 +582,29 @@ class UploaderApp:
         ttk.Entry(target, textvariable=self.table_var).grid(row=1, column=3, sticky="ew",
                                                             padx=(0, 8), pady=6)
 
+        auth_row = ttk.Frame(target)
+        auth_row.grid(row=2, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 2))
+        ttk.Label(auth_row, text="Authentication").pack(side="left")
+        ttk.Radiobutton(auth_row, text="SQL Server login", value="sql",
+                        variable=self.auth_var, command=self._toggle_auth_fields) \
+            .pack(side="left", padx=(10, 4))
+        ttk.Radiobutton(auth_row, text="Windows", value="windows",
+                        variable=self.auth_var, command=self._toggle_auth_fields) \
+            .pack(side="left", padx=4)
+
+        ttk.Label(target, text="Login").grid(row=3, column=0, sticky="w", padx=8, pady=6)
+        self.username_entry = ttk.Entry(target, textvariable=self.username_var)
+        self.username_entry.grid(row=3, column=1, sticky="ew", pady=6)
+        ttk.Label(target, text="Password").grid(row=3, column=2, sticky="w", padx=8, pady=6)
+        self.password_entry = ttk.Entry(target, textvariable=self.password_var, show="•")
+        self.password_entry.grid(row=3, column=3, sticky="ew", padx=(0, 8), pady=6)
+
+        ttk.Label(target,
+                  text="The password is used for this connection only - never saved or logged.",
+                  foreground="#555").grid(row=4, column=0, columnspan=3, sticky="w",
+                                          padx=8, pady=(0, 8))
         ttk.Button(target, text="Test connection", command=self.test_connection) \
-            .grid(row=2, column=3, sticky="e", padx=(0, 8), pady=(0, 8))
+            .grid(row=4, column=3, sticky="e", padx=(0, 8), pady=(0, 8))
 
         options = ttk.LabelFrame(self.root, text="3.  Options")
         options.pack(fill="x", **padding)
@@ -571,6 +643,20 @@ class UploaderApp:
         self.log.insert("end", text + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def _toggle_auth_fields(self):
+        using_sql_login = self.auth_var.get() == "sql"
+        state = "normal" if using_sql_login else "disabled"
+        self.username_entry.configure(state=state)
+        self.password_entry.configure(state=state)
+        if not using_sql_login:
+            self.password_var.set("")            # never keep a password we are not using
+
+    def credentials(self):
+        """-> (username, password); both None for Windows authentication."""
+        if self.auth_var.get() != "sql":
+            return None, None
+        return self.username_var.get().strip(), self.password_var.get()
 
     def _toggle_source_fields(self):
         extension = os.path.splitext(self.path_var.get())[1].lower()
@@ -650,16 +736,23 @@ class UploaderApp:
         if need_file and not self.table_var.get().strip():
             messagebox.showwarning("Missing detail", "Enter the table name.")
             return False
+        if self.auth_var.get() == "sql" and not self.username_var.get().strip():
+            messagebox.showwarning("Missing detail",
+                                   "Enter the SQL login name, or switch to Windows "
+                                   "authentication.")
+            return False
         return True
 
     def test_connection(self):
         if not self._require_pyodbc() or not self._validate(need_file=False):
             return
         import pyodbc
+        username, password = self.credentials()
         try:
             driver = pick_driver(pyodbc)
             connection = connect(self.server_var.get().strip(),
-                                 self.database_var.get().strip(), driver)
+                                 self.database_var.get().strip(), driver,
+                                 username, password)
             cursor = connection.cursor()
             cursor.execute("SELECT SUSER_SNAME(), DB_NAME(), @@VERSION")
             login, database, version = cursor.fetchone()
@@ -670,8 +763,10 @@ class UploaderApp:
                 "Driver:   %s\nLogin:    %s\nDatabase: %s\n\n%s"
                 % (driver, login, database, version.split("\n")[0]))
         except Exception as error:
-            self.write_log("Connection failed: %s" % error)
-            messagebox.showerror("Connection failed", str(error))
+            message = scrub(explain_login_error(error, username), password)
+            self.write_log("Connection failed: %s"
+                           % scrub(str(error), password).split("\n")[0])
+            messagebox.showerror("Connection failed", message)
 
     def start_upload(self):
         if self.worker is not None and self.worker.is_alive():
@@ -686,6 +781,7 @@ class UploaderApp:
         database = self.database_var.get().strip()
         schema = self.schema_var.get().strip()
         table = self.table_var.get().strip()
+        username, password = self.credentials()
 
         # 1. header row -------------------------------------------------
         try:
@@ -706,13 +802,15 @@ class UploaderApp:
         # 2. inspect the destination -----------------------------------
         try:
             driver = pick_driver(pyodbc)
-            connection = connect(server, database, driver)
+            connection = connect(server, database, driver, username, password)
             cursor = connection.cursor()
             existing = fetch_table_columns(cursor, schema, table)
             connection.close()
         except Exception as error:
-            self.write_log("Connection failed: %s" % error)
-            messagebox.showerror("Connection failed", str(error))
+            self.write_log("Connection failed: %s"
+                           % scrub(str(error), password).split("\n")[0])
+            messagebox.showerror("Connection failed",
+                                 scrub(explain_login_error(error, username), password))
             return
 
         # 3. decide the column mapping ---------------------------------
@@ -770,7 +868,8 @@ class UploaderApp:
         plan = {
             "path": path, "sheet": sheet, "encoding": encoding, "delimiter": delimiter,
             "server": server, "database": database, "schema": schema, "table": table,
-            "driver": driver, "file_columns": file_columns, "mapping": mapping,
+            "driver": driver, "username": username, "password": password,
+            "file_columns": file_columns, "mapping": mapping,
             "create_table": create_table,
             "trim": self.trim_var.get(), "blank_is_null": self.blank_null_var.get(),
         }
