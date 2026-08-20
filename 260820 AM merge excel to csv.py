@@ -28,9 +28,13 @@ RULES IMPLEMENTED
 MEMORY / SPEED
     The workbooks are streamed (openpyxl read_only) and written straight to the
     CSV one row at a time, so 5 million rows use the same memory as 500 rows.
-    Measured on 600,000 rows x 12 columns: about 4 minutes, so budget roughly
-    30-35 minutes for 50 lakh rows. Every row is the same width, so the CSV loads
-    straight into Excel, pandas or a database with no ragged row errors.
+    Measured at 65 columns on this machine:
+        file declares its size    2,350 rows/sec  -> about 35 min for 50 lakh rows
+        file does not declare it  1,220 rows/sec  -> about 70 min for 50 lakh rows
+    Those test rows were sparse; densely filled rows run slower. Every row comes
+    out the same width, so the CSV loads into pandas or a database with no ragged
+    row errors. Note that 50 lakh rows is about 1.5 GB and is far past Excel's
+    1,048,576 row limit - the result is for pandas, Power Query or a database.
 
 FILES THAT DO NOT DECLARE THEIR SIZE
     A workbook saved by Excel records its used range, so the row and column counts
