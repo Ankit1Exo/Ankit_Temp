@@ -152,9 +152,21 @@ SELECT
     CASE WHEN [First Name]  LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS FN_bad,
     CASE WHEN [Middle Name] LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS MN_bad,
     CASE WHEN [Last Name]   LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS LN_bad,
-    CASE WHEN [Suffix]      LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS SFX_bad
+    CASE WHEN [Suffix]      LIKE '%[^a-zA-Z ]%' THEN 1 ELSE 0 END AS SFX_bad,
+    CASE WHEN [First Name]  LIKE '%-%' THEN 1 ELSE 0 END AS FN_hyphen,
+    CASE WHEN [Middle Name] LIKE '%-%' THEN 1 ELSE 0 END AS MN_hyphen,
+    CASE WHEN [Last Name]   LIKE '%-%' THEN 1 ELSE 0 END AS LN_hyphen,
+    CASE WHEN [Suffix]      LIKE '%-%' THEN 1 ELSE 0 END AS SFX_hyphen,
+    CASE WHEN LTRIM(RTRIM([First Name]))  = '' THEN 1 ELSE 0 END AS FN_blank,
+    CASE WHEN LTRIM(RTRIM([Middle Name])) = '' THEN 1 ELSE 0 END AS MN_blank,
+    CASE WHEN LTRIM(RTRIM([Last Name]))   = '' THEN 1 ELSE 0 END AS LN_blank,
+    CASE WHEN LTRIM(RTRIM([Suffix]))      = '' THEN 1 ELSE 0 END AS SFX_blank
 FROM [CHS].[dbo].[260820_AM_merged_excel_data]
 WHERE [First Name]  LIKE '%[^a-zA-Z ]%'
    OR [Middle Name] LIKE '%[^a-zA-Z ]%'
    OR [Last Name]   LIKE '%[^a-zA-Z ]%'
-   OR [Suffix]      LIKE '%[^a-zA-Z ]%';
+   OR [Suffix]      LIKE '%[^a-zA-Z ]%'
+   OR LTRIM(RTRIM([First Name]))  = ''
+   OR LTRIM(RTRIM([Middle Name])) = ''
+   OR LTRIM(RTRIM([Last Name]))   = ''
+   OR LTRIM(RTRIM([Suffix]))      = '';
