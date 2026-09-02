@@ -41,14 +41,22 @@ DATA IS COPIED AS IT IS
     Every value is written as TEXT, showing what Excel shows. The cell's own
     number format is applied, so
         a date formatted dd/mm/yyyy   stays  01/03/2026
-        a date formatted dd/mm/yy     becomes 01/03/2026, NOT 01/03/26, so a
-                                      date of birth never loses its century
+        a date formatted dd/mm/yy     stays  01/03/26
         an ID formatted 000000        stays  007123
         an SSN formatted 000-00-0000  stays  123-45-6789
         1.50 formatted 0.00           stays  1.50
         45%                           stays  45%
     Text is passed through untouched - not trimmed, not converted, not
-    de-duplicated. "00123" typed as text stays "00123".
+    de-duplicated. "00123" typed as text stays "00123". A four-digit year stays
+    four digits and a two-digit year stays two - nothing about a date is ever
+    rewritten.
+
+    The one subtlety is Excel's two LOCALE-LINKED date formats, the ones the
+    Format Cells box marks with an asterisk. The file stores them as mm-dd-yy
+    and m/d/yy h:mm, but Excel draws them with this machine's short date -
+    under English (United States), m/d/yyyy. Those two are rendered the way
+    Excel really shows them, so a birth date reading 7/7/2001 on screen is
+    copied as 7/7/2001 and not as 07-07-01.
 
     The ONLY rows removed are rows that are completely blank.
 
@@ -150,20 +158,6 @@ PART_ROWS = 1_000_000
 # How far down a sheet the header row is hunted for in "by column name" mode.
 HEADER_SCAN_ROWS = 20
 
-# A two-digit year cannot tell 1999 from 2099, so a cell formatted dd/mm/yy
-# showing 01/01/99 destroys the century of a date of birth. These extracts feed
-# identity matching, so the year is written in full even when the cell's own
-# format asks for two digits. Everything else about the date - the order of the
-# day and month, the separators, the month names - still comes from the cell's
-# own format. Set this to False to copy the two-digit year exactly as shown.
-FULL_YEAR_IN_DATES = True
-
-
-def set_full_year(flag):
-    """Turn four-digit years on or off for the whole of the next run."""
-    global FULL_YEAR_IN_DATES
-    FULL_YEAR_IN_DATES = bool(flag)
-
 # Tracking columns written in front of your own columns.
 TRACKING_COLUMNS = ("Source File", "Source Sheet")
 
@@ -251,6 +245,43 @@ def parse_spec(text):
 # zero-padded IDs, punctuated IDs such as SSNs, thousands separators, fixed
 # decimals, percentages, currency, scientific notation, and every ordinary date
 # and time code.
+
+# Two of Excel's built-in date formats are LOCALE-LINKED - they are the ones the
+# Format Cells box marks with an asterisk, "*3/14/2012" and "*3/14/2012 1:30 PM".
+# The file stores them as the codes "mm-dd-yy" and "m/d/yy h:mm", but Excel
+# ignores those and draws the cell with the machine's own short date instead.
+# Under English (United States) that is M/d/yyyy, so such a cell SHOWS 7/7/2001
+# while the code stored beside it says 07-07-01. Reading the stored code
+# literally is what shortened years, so these two are mapped to what is really
+# on screen. Every other date format is fixed, and is copied exactly as it is.
+
+def _windows_pattern(name, fallback):
+    """One date or time pattern from the machine's own regional settings."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            "Control Panel\\International") as key:
+            value = str(winreg.QueryValueEx(key, name)[0]).strip()
+        return value or fallback
+    except Exception:
+        # Not Windows, or the settings are unreadable - assume the US short date.
+        return fallback
+
+
+def _locale_linked_formats():
+    """Stored code -> what Excel really shows, for the two asterisk formats."""
+    # Windows writes the month as M and the meridiem as tt, where Excel wants m
+    # and AM/PM. Lower-casing turns M/d/yyyy into the Excel code m/d/yyyy.
+    date_code = _windows_pattern("sShortDate", "m/d/yyyy").lower()
+    time_code = _windows_pattern("sShortTime", "h:mm tt").lower().replace(
+        "tt", "AM/PM")
+    return {
+        "mm-dd-yy": date_code,                              # builtin 14
+        "m/d/yy h:mm": "%s %s" % (date_code, time_code),    # builtin 22
+    }
+
+
+LOCALE_LINKED_FORMATS = _locale_linked_formats()
 
 # Parsed formats are reused across millions of cells, so they are cached.
 _FORMAT_CACHE = {}
@@ -523,12 +554,8 @@ def _render_date(value, tokens):
             letter = text[0]
             width = len(text)
             if letter == "y":
-                # A yy format is widened to four digits unless that was
-                # deliberately turned off - see FULL_YEAR_IN_DATES.
-                if width > 2 or FULL_YEAR_IN_DATES:
-                    out.append("%04d" % moment.year)
-                else:
-                    out.append("%02d" % (moment.year % 100))
+                out.append("%04d" % moment.year if width > 2
+                           else "%02d" % (moment.year % 100))
             elif letter == "m":
                 if width >= 5:
                     out.append(MONTH_NAMES[moment.month - 1][0])
@@ -740,6 +767,10 @@ def display_text(value, number_format):
     if isinstance(value, str):
         # Text is never reformatted. Whatever was typed is what is copied.
         return value
+
+    # An asterisk format is drawn with this machine's short date rather than
+    # with the code the file stores, so swap it before anything else sees it.
+    number_format = LOCALE_LINKED_FORMATS.get(number_format, number_format)
 
     fmt = parse_format(number_format)
     if fmt.general:
@@ -1847,7 +1878,6 @@ class CombinerApp:
         self.subfolders = tk.BooleanVar(value=settings.get("subfolders", False))
         self.mode = tk.StringVar(value=settings.get("mode", HEADER_BY_NAME))
         self.overflow = tk.StringVar(value=settings.get("overflow", OVERFLOW_PARTS))
-        self.full_year = tk.BooleanVar(value=settings.get("full_year", True))
         self.status = tk.StringVar(
             value="Pick a folder, choose how the header is found, then Run.")
         self.busy = False
@@ -1895,22 +1925,6 @@ class CombinerApp:
         self.spec = scrolledtext.ScrolledText(box, height=6, font=("Consolas", 10))
         self.spec.pack(fill="x", padx=26, pady=(0, 8))
         self.spec.insert("1.0", settings.get("spec", ""))
-
-        # ---- how values are copied ----------------------------------------
-        box = ttk.LabelFrame(root, text="How values are copied")
-        box.pack(fill="x", padx=8, pady=(6, 2))
-        ttk.Checkbutton(
-            box,
-            text=("Always write dates with a 4-digit year, even where the cell "
-                  "itself shows only two"),
-            variable=self.full_year).pack(anchor="w", padx=8, pady=(4, 0))
-        ttk.Label(
-            box,
-            text=("Leave this ticked for anything holding a date of birth. A "
-                  "cell formatted dd/mm/yy shows 01/01/99, which cannot tell "
-                  "1999 from 2099. Untick it only if you need the two-digit "
-                  "year copied exactly as Excel shows it."),
-            wraplength=940, justify="left").pack(fill="x", padx=26, pady=(0, 6))
 
         # ---- what to do if it will not fit --------------------------------
         box = ttk.LabelFrame(
@@ -2016,7 +2030,6 @@ class CombinerApp:
             "mode": mode,
             "overflow": self.overflow.get(),
             "subfolders": bool(self.subfolders.get()),
-            "full_year": bool(self.full_year.get()),
             "spec": self.spec.get("1.0", "end").strip(),
         })
         return folder, initials, mode, spec
@@ -2091,7 +2104,6 @@ class CombinerApp:
         got = self.inputs()
         if got and not self.busy:
             folder, initials, mode, spec = got
-            set_full_year(self.full_year.get())
             self.lock(True)
             threading.Thread(
                 target=self._run,

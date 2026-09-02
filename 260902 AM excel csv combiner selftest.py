@@ -28,8 +28,9 @@ What it plants, and therefore what it proves:
     * number formats - a zero-padded ID, an SSN mask, a date, a percentage,
       a thousands separator - which must come through as they are DISPLAYED
     * a completely blank row, which must be dropped
-    * a date of birth in a dd/mm/yy cell, whose century must survive, next
-      to a CSV text date that must NOT be rewritten
+    * dates in five different formats, every one of which must be copied
+      exactly as the cell shows it, including Excel's locale-linked
+      "*3/14/2012" format whose stored code disagrees with the screen
     * an overflow that does not fit one worksheet, written as parts with no
       source file split across two parts, and the same overflow written as one
       CSV instead
@@ -506,74 +507,72 @@ def scenario_overflow_csv(mod, folder):
 # Runner
 # ---------------------------------------------------------------------------
 
-def scenario_two_digit_year(mod, parent):
-    """A date of birth must never lose its century.
+def scenario_date_formats(mod, parent):
+    """Dates are copied exactly as the cell shows them - no year is rewritten.
 
-    A cell holding 1 Jan 1999 but formatted dd/mm/yy is DISPLAYED by Excel as
-    01/01/99. Copying that verbatim cannot tell 1999 from 2099, so the year is
-    widened. A CSV holding the date as text must still be copied untouched."""
+    The exception that has to be handled is Excel's LOCALE-LINKED format, the
+    one Format Cells marks "*3/14/2012". The file stores it as the code
+    mm-dd-yy, but Excel draws the cell with the machine's short date, so it
+    reads 7/7/2001 on screen. Copying the stored code would shorten the year to
+    07-07-01, which is the one case where trusting the code is wrong."""
     print("")
     print("-" * 72)
-    print("TWO-DIGIT YEARS IN DATES")
+    print("DATE FORMATS ARE COPIED AS SHOWN")
     print("-" * 72)
-    folder = os.path.join(parent, "years")
+    folder = os.path.join(parent, "dates")
     os.makedirs(folder, exist_ok=True)
 
     path = os.path.join(folder, "260902 AM test dates.xlsx")
     book = Workbook()
     sheet = book.active
-    for column, name in enumerate(["First Name", "SSN", "DOB", "Shown"], 1):
+    for column, name in enumerate(
+            ["First Name", "SSN", "Two Digit", "Four Digit", "Month Name",
+             "Locale Linked"], 1):
         put(sheet, 1, column, name)
     put(sheet, 2, 1, "Ada")
     put(sheet, 2, 2, 111223333, "000-00-0000")
     put(sheet, 2, 3, datetime(1999, 1, 1), "dd/mm/yy")
     put(sheet, 2, 4, datetime(1999, 1, 1), "dd/mm/yyyy")
-    put(sheet, 3, 1, "Grace")
-    put(sheet, 3, 2, 222334444, "000-00-0000")
-    put(sheet, 3, 3, datetime(2001, 12, 31), "d-mmm-yy")
-    put(sheet, 3, 4, datetime(2001, 12, 31), "mm/dd/yy")
+    put(sheet, 2, 5, datetime(2001, 12, 31), "d-mmm-yy")
+    put(sheet, 2, 6, datetime(2001, 7, 7), "mm-dd-yy")     # Excel builtin 14
     book.save(path)
     book.close()
 
     csv_path = os.path.join(folder, "260902 AM test dates.csv")
     with open(csv_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["First Name", "SSN", "DOB"])
-        writer.writerow(["Katherine", "333-44-5555", "01/01/1999"])
-        writer.writerow(["Joan", "444-55-6666", "7/4/76"])
+        writer.writerow(["First Name", "SSN", "Two Digit", "Four Digit"])
+        writer.writerow(["Katherine", "333-44-5555", "7/4/76", "01/01/1999"])
 
-    def run():
-        _, paths, _, _ = mod.combine(
-            folder, "AM", mod.HEADER_BY_NAME, ["First Name", "SSN"],
-            mod.OVERFLOW_PARTS, False, lambda *a: None, lambda *a: None)
-        return as_records(read_xlsx(paths[0]))
+    _, paths, _, _ = mod.combine(
+        folder, "AM", mod.HEADER_BY_NAME, ["First Name", "SSN"],
+        mod.OVERFLOW_PARTS, False, lambda *a: None, lambda *a: None)
+    records = as_records(read_xlsx(paths[0]))
 
-    mod.set_full_year(True)
-    records = run()
-    check("dd/mm/yy date of birth is widened to four digits",
-          find(records, "Ada").get("DOB"), "01/01/1999")
-    check("dd/mm/yyyy is untouched",
-          find(records, "Ada").get("Shown"), "01/01/1999")
-    check("d-mmm-yy keeps its day, month name and order, gains the century",
-          find(records, "Grace").get("DOB"), "31-Dec-2001")
-    check("mm/dd/yy keeps American order, gains the century",
-          find(records, "Grace").get("Shown"), "12/31/2001")
-    check("CSV text date is still copied byte for byte",
-          find(records, "Katherine").get("DOB"), "01/01/1999")
-    check("CSV text that merely looks short is NOT rewritten",
-          find(records, "Joan").get("DOB"), "7/4/76")
+    ada = find(records, "Ada")
+    check("a dd/mm/yy cell keeps its two-digit year, untouched",
+          ada.get("Two Digit"), "01/01/99")
+    check("a dd/mm/yyyy cell keeps its four-digit year, untouched",
+          ada.get("Four Digit"), "01/01/1999")
+    check("a d-mmm-yy cell is left exactly as it reads",
+          ada.get("Month Name"), "31-Dec-01")
 
-    try:
-        mod.set_full_year(False)
-        records = run()
-        check("turning the option off restores the exact two-digit display",
-              find(records, "Ada").get("DOB"), "01/01/99")
-        check("four-digit formats are unaffected by the option",
-              find(records, "Ada").get("Shown"), "01/01/1999")
-        check("CSV text is unaffected by the option",
-              find(records, "Katherine").get("DOB"), "01/01/1999")
-    finally:
-        mod.set_full_year(True)
+    # The locale-linked format is the one case the stored code lies about.
+    shown = ada.get("Locale Linked")
+    short_date = mod.LOCALE_LINKED_FORMATS.get("mm-dd-yy")
+    check_true("locale-linked date is not the raw stored mm-dd-yy code",
+               shown != "07-07-01")
+    check_true("locale-linked date shows the year Excel shows (%r)" % short_date,
+               "2001" in shown)
+    if short_date == "m/d/yyyy":
+        check("locale-linked date matches the US short date on screen",
+              shown, "7/7/2001")
+
+    katherine = find(records, "Katherine")
+    check("a short text date in a CSV is NOT expanded",
+          katherine.get("Two Digit"), "7/4/76")
+    check("a full text date in a CSV is copied byte for byte",
+          katherine.get("Four Digit"), "01/01/1999")
 
 
 def main():
@@ -593,7 +592,7 @@ def main():
         scenario_first_row(mod, folder)
         scenario_overflow_parts(mod, folder)
         scenario_overflow_csv(mod, folder)
-        scenario_two_digit_year(mod, folder)
+        scenario_date_formats(mod, folder)
     except Exception:
         print("")
         print(traceback.format_exc())
