@@ -28,6 +28,8 @@ What it plants, and therefore what it proves:
     * number formats - a zero-padded ID, an SSN mask, a date, a percentage,
       a thousands separator - which must come through as they are DISPLAYED
     * a completely blank row, which must be dropped
+    * a date of birth in a dd/mm/yy cell, whose century must survive, next
+      to a CSV text date that must NOT be rewritten
     * an overflow that does not fit one worksheet, written as parts with no
       source file split across two parts, and the same overflow written as one
       CSV instead
@@ -504,6 +506,76 @@ def scenario_overflow_csv(mod, folder):
 # Runner
 # ---------------------------------------------------------------------------
 
+def scenario_two_digit_year(mod, parent):
+    """A date of birth must never lose its century.
+
+    A cell holding 1 Jan 1999 but formatted dd/mm/yy is DISPLAYED by Excel as
+    01/01/99. Copying that verbatim cannot tell 1999 from 2099, so the year is
+    widened. A CSV holding the date as text must still be copied untouched."""
+    print("")
+    print("-" * 72)
+    print("TWO-DIGIT YEARS IN DATES")
+    print("-" * 72)
+    folder = os.path.join(parent, "years")
+    os.makedirs(folder, exist_ok=True)
+
+    path = os.path.join(folder, "260902 AM test dates.xlsx")
+    book = Workbook()
+    sheet = book.active
+    for column, name in enumerate(["First Name", "SSN", "DOB", "Shown"], 1):
+        put(sheet, 1, column, name)
+    put(sheet, 2, 1, "Ada")
+    put(sheet, 2, 2, 111223333, "000-00-0000")
+    put(sheet, 2, 3, datetime(1999, 1, 1), "dd/mm/yy")
+    put(sheet, 2, 4, datetime(1999, 1, 1), "dd/mm/yyyy")
+    put(sheet, 3, 1, "Grace")
+    put(sheet, 3, 2, 222334444, "000-00-0000")
+    put(sheet, 3, 3, datetime(2001, 12, 31), "d-mmm-yy")
+    put(sheet, 3, 4, datetime(2001, 12, 31), "mm/dd/yy")
+    book.save(path)
+    book.close()
+
+    csv_path = os.path.join(folder, "260902 AM test dates.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["First Name", "SSN", "DOB"])
+        writer.writerow(["Katherine", "333-44-5555", "01/01/1999"])
+        writer.writerow(["Joan", "444-55-6666", "7/4/76"])
+
+    def run():
+        _, paths, _, _ = mod.combine(
+            folder, "AM", mod.HEADER_BY_NAME, ["First Name", "SSN"],
+            mod.OVERFLOW_PARTS, False, lambda *a: None, lambda *a: None)
+        return as_records(read_xlsx(paths[0]))
+
+    mod.set_full_year(True)
+    records = run()
+    check("dd/mm/yy date of birth is widened to four digits",
+          find(records, "Ada").get("DOB"), "01/01/1999")
+    check("dd/mm/yyyy is untouched",
+          find(records, "Ada").get("Shown"), "01/01/1999")
+    check("d-mmm-yy keeps its day, month name and order, gains the century",
+          find(records, "Grace").get("DOB"), "31-Dec-2001")
+    check("mm/dd/yy keeps American order, gains the century",
+          find(records, "Grace").get("Shown"), "12/31/2001")
+    check("CSV text date is still copied byte for byte",
+          find(records, "Katherine").get("DOB"), "01/01/1999")
+    check("CSV text that merely looks short is NOT rewritten",
+          find(records, "Joan").get("DOB"), "7/4/76")
+
+    try:
+        mod.set_full_year(False)
+        records = run()
+        check("turning the option off restores the exact two-digit display",
+              find(records, "Ada").get("DOB"), "01/01/99")
+        check("four-digit formats are unaffected by the option",
+              find(records, "Ada").get("Shown"), "01/01/1999")
+        check("CSV text is unaffected by the option",
+              find(records, "Katherine").get("DOB"), "01/01/1999")
+    finally:
+        mod.set_full_year(True)
+
+
 def main():
     print("=" * 72)
     print("SELF TEST - %s" % TOOL)
@@ -521,6 +593,7 @@ def main():
         scenario_first_row(mod, folder)
         scenario_overflow_parts(mod, folder)
         scenario_overflow_csv(mod, folder)
+        scenario_two_digit_year(mod, folder)
     except Exception:
         print("")
         print(traceback.format_exc())
