@@ -170,3 +170,74 @@ WHERE [First Name]  LIKE '%[^a-zA-Z ]%'
    OR LTRIM(RTRIM([Middle Name])) = ''
    OR LTRIM(RTRIM([Last Name]))   = ''
    OR LTRIM(RTRIM([Suffix]))      = '';
+
+
+
+
+
+Doc ID	TRUE	Doc ID			Doc ID
+First Name	TRUE	First Name			First Name
+Middle Name	TRUE	Middle Name			Middle Name
+Last Name	TRUE	Last Name			Last Name
+Suffix	TRUE	Suffix			Suffix
+Entity Type_Patient	TRUE	Entity Type_Patient			Entity Type_Patient
+Entity Type_Employee	TRUE	Entity Type_Employee			Entity Type_Employee
+Entity Type_Other	TRUE	Entity Type_Other			Entity Type_Other
+Is Minor	TRUE	Is Minor			Is Minor
+Is Deceased	TRUE	Is Deceased			Is Deceased
+Street Address	TRUE	Street Address			Street Address
+City	TRUE	City			City
+State	TRUE	State			State
+Zip Code	TRUE	Zip Code			Zip Code
+International Street Address	TRUE	International Street Address			International Street Address
+International City	TRUE	International City			International City
+International State/Province	TRUE	International State/Province			International State/Province
+Postal Code	TRUE	Postal Code			Postal Code
+Country	TRUE	Country			Country
+Email Address	TRUE	Email Address			Email Address
+Phone Number	TRUE	Phone Number			Phone Number
+Date of Birth	TRUE	Date of Birth			Date of Birth
+Social Security Number (SSN)	TRUE	Social Security Number (SSN)			Social Security Number (SSN)
+Individual Taxpayer Identification Number (ITIN)	TRUE	Individual Taxpayer Identification Number (ITIN)			Individual Taxpayer Identification Number (ITIN)
+Driver's License Number	TRUE	Driver's License Number			Driver's License Number
+Tax IP PIN	TRUE	Tax IP PIN			Tax IP PIN
+Other Government ID Number	TRUE	Other Government ID Number			Other Government ID Number
+Passport Number	TRUE	Passport Number			Passport Number
+State ID Number	TRUE	State ID Number			State ID Number
+Student ID Number (CO, WA, DC)	TRUE	Student ID Number (CO, WA, DC)			Student ID Number (CO, WA, DC)
+Employee ID and Password (ND,SD)	TRUE	Employee ID and Password (ND,SD)			Employee ID and Password (ND,SD)
+Fin Acct Number ONLY	TRUE	Fin Acct Number ONLY			Fin Acct Number ONLY
+Fin Acct Number WITH Access	TRUE	Fin Acct Number WITH Access			Fin Acct Number WITH Access
+Fin Acct Number Last Four Digits	TRUE	Fin Acct Number Last Four Digits			Fin Acct Number Last Four Digits
+Payment Card Number ONLY	TRUE	Payment Card Number ONLY			Payment Card Number ONLY
+Payment Card WITH Access	TRUE	Payment Card WITH Access			Payment Card WITH Access
+Payment Card Number Last Four Digits	TRUE	Payment Card Number Last Four Digits			Payment Card Number Last Four Digits
+Username/Email Address and Password for Non-Fin Acc	TRUE	Username/Email Address and Password for Non-Fin Acc			Username/Email Address and Password for Non-Fin Acc
+Username/Email Address and Password for Fin Acc	TRUE	Username/Email Address and Password for Fin Acc			Username/Email Address and Password for Fin Acc
+Diagnosis/Diagnosis Code	TRUE	Diagnosis/Diagnosis Code			Diagnosis/Diagnosis Code
+Health Insurance Individual Policy Number	TRUE	Health Insurance Individual Policy Number			Health Insurance Individual Policy Number
+Medical History/Treatment/Condition/Prescription	TRUE	Medical History/Treatment/Condition/Prescription			Medical History/Treatment/Condition/Prescription
+Hospital Unit/Physician Name	TRUE	Hospital Unit/Physician Name			Hospital Unit/Physician Name
+Date of Service	TRUE	Date of Service			Date of Service
+Medical Record Number (MRN)	TRUE	Medical Record Number (MRN)			Medical Record Number (MRN)
+Patient ID	TRUE	Patient ID			Patient ID
+Patient Account Number (PAN)	TRUE	Patient Account Number (PAN)			Patient Account Number (PAN)
+Other Unique Health Identifier	TRUE	Other Unique Health Identifier			Other Unique Health Identifier
+Medicare/Medicaid Number	TRUE	Medicare/Medicaid Number			Medicare/Medicaid Number
+Patient Personal Representative	TRUE	Patient Personal Representative			Patient Personal Representative
+Referral	TRUE	Referral			Referral
+Biometric Identifiers	TRUE	Biometric Identifiers			Biometric Identifiers
+Digital Cryptographic Signatures (AZ, NC, ND, WA)	TRUE	Digital Cryptographic Signatures (AZ, NC, ND, WA)			Digital Cryptographic Signatures (AZ, NC, ND, WA)
+Certificate/License Number	TRUE	Certificate/License Number			Certificate/License Number
+DNA Profile	TRUE	DNA Profile			DNA Profile
+Full Face Photo	TRUE	Full Face Photo			Full Face Photo
+IP Address	TRUE	IP Address			IP Address
+Medical Device Identifier	TRUE	Medical Device Identifier			Medical Device Identifier
+URL	TRUE	URL			URL
+Vehicle ID Number	TRUE	Vehicle ID Number			Vehicle ID Number
+Birth OR Marriage Certificate (WY)	TRUE	Birth OR Marriage Certificate (WY)			Birth OR Marriage Certificate (WY)
+General Tax Info	TRUE	General Tax Info			General Tax Info
+Parent's Birth Name (ND, NC)	TRUE	Parent's Birth Name (ND, NC)			Parent's Birth Name (ND, NC)
+Work-Related Evaluations (PR)	TRUE	Work-Related Evaluations (PR)			Work-Related Evaluations (PR)
+Review Comments	TRUE	Review Comments			Review Comments
+
