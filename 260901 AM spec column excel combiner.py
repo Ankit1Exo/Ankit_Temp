@@ -17,11 +17,28 @@ THE RULE THIS TOOL FOLLOWS
     * a file with more than one matching sheet -> all of them are appended and
                                         the file is listed in the summary
 
+THE COLUMN LIST YOU TYPE
+    ONE NAME PER LINE. Names are NOT split on commas, because real column names
+    contain them - "Student ID Number (CO, WA, DC)" is one column, not three.
+    Paste a column straight out of Excel and it just works; if the paste brings
+    extra columns along with it, only the first is taken from each line.
+
+    The count under the box always shows how many names were recognised. If it
+    does not equal the number of columns you pasted, stop and fix that first -
+    nothing downstream can line up until it does.
+
 HEADERS
     The header is ROW 1 of every sheet. Nothing above it, nothing scanned for.
     Header names match after trimming and ignoring case, so "Client ID",
-    "client id" and "  CLIENT   ID " all count as the same column. The output
+    "client id" and "  CLIENT   ID " all count as the same column. Line breaks
+    inside a wrapped heading cell are treated as spaces, and characters that
+    only LOOK the same are unified first - Excel's curly apostrophe in
+    "Driver’s License Number" matches the straight one you typed. The output
     uses YOUR spelling from the spec box.
+
+    When a spec column is reported missing but the sheet holds a heading that
+    differs only in punctuation, the summary names it under "Near match". Tick
+    "Also ignore punctuation" to make those match too.
 
     Duplicate headings inside one sheet are kept apart as "Name", "Name (2)".
     A data column whose heading cell is blank is named after its Excel column
@@ -125,19 +142,52 @@ def is_blank(value):
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def match_key(text):
-    """Key used to line a heading up against the spec: non-breaking spaces
-    normalised, outer and repeated spaces collapsed, case ignored."""
+# Characters that look identical on screen but are not the same character.
+# Excel autocorrects a typed apostrophe into a curly one, so a spec typed by
+# hand and a heading typed in Excel can differ invisibly.
+LOOKALIKES = {
+    "\xa0": " ",                                    # non-breaking space
+    "‘": "'", "’": "'", "ʼ": "'",     # curly apostrophes
+    "“": '"', "”": '"',                    # curly quotes
+    "–": "-", "—": "-", "‑": "-",     # dashes
+    "​": "", "‌": "", "‍": "", "﻿": "",   # zero width
+}
+
+# Set from the "ignore punctuation" tick box. When on, every non-alphanumeric
+# character is dropped before matching, so "Fin Acct Number ONLY" and
+# "Fin-Acct Number ONLY" reach the same key.
+IGNORE_PUNCTUATION = False
+
+
+def unify(text):
+    """Replace look-alike characters with their plain equivalents."""
     if text is None:
         return ""
-    return " ".join(str(text).replace("\xa0", " ").split()).casefold()
+    text = str(text)
+    for odd, plain in LOOKALIKES.items():
+        if odd in text:
+            text = text.replace(odd, plain)
+    return text
+
+
+def match_key(text):
+    """Key used to line a heading up against the spec: look-alike characters
+    unified, line breaks and repeated spaces collapsed, case ignored - and
+    punctuation dropped as well when IGNORE_PUNCTUATION is on."""
+    key = " ".join(unify(text).split()).casefold()
+    if IGNORE_PUNCTUATION:
+        key = re.sub(r"[^a-z0-9]+", "", key)
+    return key
+
+
+def loose_key(text):
+    """Punctuation-blind key, used only to explain a near miss to the user."""
+    return re.sub(r"[^a-z0-9]+", "", " ".join(unify(text).split()).casefold())
 
 
 def tidy(text):
     """The heading as it will be shown: trimmed, inner runs of spaces collapsed."""
-    if text is None:
-        return ""
-    return " ".join(str(text).replace("\xa0", " ").split())
+    return " ".join(unify(text).split())
 
 
 def cell_text(value):
@@ -176,12 +226,27 @@ def cell_text(value):
 
 
 def parse_spec(text):
-    """Turn the pasted spec into an ordered list of column names. Accepts one
-    name per line, or comma / tab / semicolon separated, or any mixture.
+    """Turn the pasted spec into an ordered list of column names.
+
+    ONE NAME PER LINE whenever more than one line was given. Real column names
+    contain commas - "Student ID Number (CO, WA, DC)" is ONE column, not three -
+    so a list written out vertically is never split on punctuation. If a line
+    holds tabs it was pasted from more than one Excel column, and only the
+    first field is taken.
+
+    A single line with no line breaks is the one case where the names cannot be
+    one-per-line, so there they are split on tabs, commas and semicolons.
+
     Case-insensitive duplicates are dropped, keeping the first spelling."""
+    lines = [line for line in unify(text).splitlines() if line.strip()]
     pieces = []
-    for line in str(text).splitlines():
-        for piece in re.split(r"[,;\t]", line):
+    if len(lines) > 1:
+        for line in lines:
+            name = tidy(line.split("\t")[0])
+            if name:
+                pieces.append(name)
+    else:
+        for piece in re.split(r"[,;\t]", lines[0] if lines else ""):
             name = tidy(piece)
             if name:
                 pieces.append(name)
@@ -212,6 +277,8 @@ class SheetPlan:
         self.mapping = {}       # spec key -> column index in the sheet
         self.extras = []        # (column index, display name, key)
         self.missing = []       # spec names not found
+        self.headers_seen = []  # every heading actually read from row 1
+        self.near = []          # 'spec name ~ heading that nearly matched'
         self.duplicates = []    # headings seen more than once in this sheet
         self.rows_out = 0
         self.rows_blank = 0
@@ -251,6 +318,7 @@ def plan_sheet(plan, header_row, spec_keys, spec_names):
             plan.duplicates.append(display)
             display = "%s (%d)" % (display, count)
             key = match_key(display)
+        plan.headers_seen.append(display)
         if key in spec_keys and key not in plan.mapping:
             plan.mapping[key] = index
         else:
@@ -259,7 +327,18 @@ def plan_sheet(plan, header_row, spec_keys, spec_names):
     plan.missing = [spec_names[key] for key in spec_keys if key not in plan.mapping]
     if plan.missing:
         plan.status = SKIPPED_MISSING
+        # A heading that matches once punctuation is ignored is almost always
+        # the column the user meant - say so rather than just "missing".
+        loose = {}
+        for heading in plan.headers_seen:
+            loose.setdefault(loose_key(heading), heading)
+        for name in plan.missing:
+            heading = loose.get(loose_key(name))
+            if heading and heading != name:
+                plan.near.append("%s ~ %s" % (name, heading))
         plan.detail = "missing: " + ", ".join(plan.missing)
+        if plan.near:
+            plan.detail += "  |  near match (punctuation only): " +                 ", ".join(plan.near)
     else:
         plan.status = APPENDED
     return plan
@@ -403,6 +482,10 @@ def combine(folder, initials, spec_names, log, progress):
     spec_lookup = dict(zip(spec_keys, spec_names))
 
     files = collect_files(folder)
+    log("Spec understood as %d column(s): %s"
+        % (len(spec_names), ", ".join(spec_names)))
+    if IGNORE_PUNCTUATION:
+        log("Punctuation is being ignored when matching headings.")
     log("%d file(s) found in %s" % (len(files), folder))
     if not files:
         raise RuntimeError("No .xlsx or .xlsm files in that folder.")
@@ -696,6 +779,7 @@ def write_summary(out_folder, base, source_folder, started, spec_names, plans,
             plan.rows_out,
             plan.rows_blank,
             ", ".join(plan.missing),
+            ", ".join(plan.near),
             ", ".join(display for _, display, _ in plan.extras),
             ", ".join(sorted(set(plan.duplicates))),
             ", ".join(plan.empty_columns),
@@ -703,6 +787,7 @@ def write_summary(out_folder, base, source_folder, started, spec_names, plans,
         ))
     add_table(detail, ("File", "Sheet", "Status", "Hidden sheet", "Rows appended",
                        "Blank rows dropped", "Missing spec columns",
+                       "Near match - punctuation only",
                        "Extra columns in this sheet", "Duplicate headings",
                        "Columns that came through empty", "Detail"), rows, 3)
     detail.freeze_panes = "A4"
@@ -793,6 +878,21 @@ class CombinerApp:
         self.spec = scrolledtext.ScrolledText(root, height=9, font=("Consolas", 10))
         self.spec.pack(fill="x", padx=8)
         self.spec.insert("1.0", settings.get("spec", ""))
+        self.spec.bind("<KeyRelease>", self.recount)
+        self.spec.bind("<<Paste>>", lambda event: self.root.after(50, self.recount))
+
+        # Reading the spec back straight away is the whole point: if the count
+        # is not the number of columns you pasted, nothing else will line up.
+        self.count = tk.StringVar(value="")
+        ttk.Label(root, textvariable=self.count, anchor="w",
+                  foreground="#0a5").pack(fill="x", padx=8, pady=(2, 0))
+
+        self.loose = tk.BooleanVar(value=settings.get("loose", False))
+        ttk.Checkbutton(
+            root, variable=self.loose,
+            text=("Also ignore punctuation when matching headings - turn this on "
+                  "only if the summary reports a near match"),
+        ).pack(anchor="w", padx=8)
 
         buttons = ttk.Frame(root)
         buttons.pack(fill="x", **pad)
@@ -811,8 +911,17 @@ class CombinerApp:
         self.log_box.pack(fill="both", expand=True, padx=8, pady=6)
 
         ttk.Label(root, textvariable=self.status, anchor="w").pack(fill="x", padx=8, pady=(0, 6))
+        self.recount()
 
     # -- small helpers ------------------------------------------------------
+
+    def recount(self, event=None):
+        names = parse_spec(self.spec.get("1.0", "end"))
+        if not names:
+            self.count.set("No column names yet.")
+        else:
+            self.count.set("%d column(s) recognised - first: %s - last: %s"
+                           % (len(names), names[0], names[-1]))
 
     def log(self, text=""):
         self.root.after(0, self._log, text)
@@ -859,7 +968,10 @@ class CombinerApp:
             messagebox.showerror("Author code",
                                  "Please provide your 2-letter author code (your initials).")
             return None
+        global IGNORE_PUNCTUATION
+        IGNORE_PUNCTUATION = bool(self.loose.get())
         save_settings({"folder": folder, "initials": initials,
+                       "loose": IGNORE_PUNCTUATION,
                        "spec": self.spec.get("1.0", "end").strip()})
         return folder, initials, spec
 
@@ -886,6 +998,9 @@ class CombinerApp:
             files = collect_files(folder)
             self.log("=" * 78)
             self.log("HEADER CHECK - nothing is written")
+            self.log("Spec understood as %d column(s):" % len(spec))
+            for position, name in enumerate(spec, 1):
+                self.log("   %2d. %s" % (position, name))
             self.log("%d file(s) found" % len(files))
             appended = skipped = 0
             for index, path in enumerate(files, 1):
@@ -901,6 +1016,11 @@ class CombinerApp:
                     if plan.ok and plan.extras:
                         self.log("         extra: %s"
                                  % ", ".join(d for _, d, _ in plan.extras))
+                    if not plan.ok and plan.headers_seen:
+                        # Seeing the real headings next to the spec is what
+                        # makes a stubborn mismatch obvious.
+                        self.log("         headings found: %s"
+                                 % ", ".join(plan.headers_seen))
                     if plan.ok:
                         appended += 1
                     else:

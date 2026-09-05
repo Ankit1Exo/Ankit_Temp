@@ -153,8 +153,104 @@ def summary_text(sheet_obj):
         for row in sheet_obj.iter_rows(values_only=True))
 
 
+REAL_WORLD = [
+    "Doc ID",
+    "Student ID Number (CO, WA, DC)",
+    "Employee ID and Password (ND,SD)",
+    "Digital Cryptographic Signatures (AZ, NC, ND, WA)",
+    "Parent's Birth Name (ND, NC)",
+    "Username/Email Address and Password for Non-Fin Acc",
+    "Driver's License Number",
+    "Fin Acct Number ONLY",
+]
+
+
+def spec_checks(tool):
+    """The column list must survive being typed out vertically. Six of the
+    names below contain commas, which is what broke the first version."""
+    print("-- reading the typed column list --")
+    check("a vertical list with commas in the names is not split",
+          tool.parse_spec("\n".join(REAL_WORLD)), REAL_WORLD)
+    check("blank lines are ignored",
+          tool.parse_spec("\n\nDoc ID\n\n  \nCity\n"), ["Doc ID", "City"])
+    check("a paste carrying extra columns keeps only the first",
+          tool.parse_spec("Doc ID\tTRUE\tDoc ID\nFirst Name\tTRUE\tFirst Name"),
+          ["Doc ID", "First Name"])
+    check("one single line is still split on commas",
+          tool.parse_spec("Doc ID, First Name; Last Name"),
+          ["Doc ID", "First Name", "Last Name"])
+    check("a lone name with a comma in it survives on its own line",
+          tool.parse_spec("Student ID Number (CO, WA, DC)\nDoc ID"),
+          ["Student ID Number (CO, WA, DC)", "Doc ID"])
+    check("case-insensitive duplicates are dropped",
+          tool.parse_spec("Doc ID\ndoc id\nCity"), ["Doc ID", "City"])
+    check("a curly apostrophe matches a straight one",
+          tool.match_key("Driver’s License Number"),
+          tool.match_key("Driver's License Number"))
+    check("a wrapped heading with a line break matches",
+          tool.match_key("Fin Acct\nNumber ONLY"),
+          tool.match_key("Fin Acct Number ONLY"))
+    check("a non-breaking space matches an ordinary one",
+          tool.match_key("Doc\xa0ID"), tool.match_key("Doc ID"))
+    print()
+
+
+def punctuation_checks(tool, root):
+    """A heading that differs only in punctuation must be explained, not just
+    reported missing - and the tick box must then make it match."""
+    print("\n-- punctuation and look-alike characters --")
+    folder = os.path.join(root, "punctuation")
+    os.makedirs(folder, exist_ok=True)
+    spec = ["Doc ID", "Driver's License Number", "Fin Acct Number ONLY"]
+
+    wb = Workbook()
+    sheet(wb, "Data", [
+        ["Doc ID", "Driver’s License Number", "Fin Acct Number ONLY"],
+        ["D1", "L1", "F1"],
+    ], first=True)
+    wb.save(os.path.join(folder, "curly apostrophe.xlsx"))
+
+    wb = Workbook()
+    sheet(wb, "Data", [
+        ["Doc ID", "Driver's License Number", "Fin-Acct Number ONLY"],
+        ["D2", "L2", "F2"],
+    ], first=True)
+    wb.save(os.path.join(folder, "hyphenated.xlsx"))
+
+    _, csv_path, _, summary_path, rows = tool.combine(
+        folder, "ZZ", spec, lambda t="": None, lambda a, b: None)
+    body = read_csv(csv_path)[1:]
+    check("the curly-apostrophe file matched anyway", rows, 1)
+    check("only the look-alike file came through",
+          [r[0] for r in body], ["curly apostrophe.xlsx"])
+
+    detail = {}
+    for row in load_workbook(summary_path)["Sheet Details"].iter_rows(
+            min_row=4, values_only=True):
+        if row[0]:
+            detail[row[0]] = row
+    check("the hyphen difference is reported as missing",
+          detail["hyphenated.xlsx"][6], "Fin Acct Number ONLY")
+    check("and the near match names the real heading",
+          detail["hyphenated.xlsx"][7],
+          "Fin Acct Number ONLY ~ Fin-Acct Number ONLY")
+
+    # Now the escape hatch.
+    tool.IGNORE_PUNCTUATION = True
+    try:
+        _, csv_path, _, _, rows = tool.combine(
+            folder, "ZZ", spec, lambda t="": None, lambda a, b: None)
+        check("ignoring punctuation lets both files through", rows, 2)
+        check("both files contributed",
+              sorted(r[0] for r in read_csv(csv_path)[1:]),
+              ["curly apostrophe.xlsx", "hyphenated.xlsx"])
+    finally:
+        tool.IGNORE_PUNCTUATION = False
+
+
 def main():
     tool = load_tool()
+    spec_checks(tool)
 
     root = os.path.join(tempfile.gettempdir(), "spec combiner selftest")
     shutil.rmtree(root, ignore_errors=True)
@@ -258,13 +354,13 @@ def main():
     check("blank row is counted in the summary",
           detail[("clean.xlsx", "Data")][5], 1)
     check("a spec column blank all the way down is flagged",
-          detail[("zz blank amount column.xlsx", "Data")][9], "Amount")
+          detail[("zz blank amount column.xlsx", "Data")][10], "Amount")
     # The flag is for a column blank ALL the way down; one uncached formula
     # inside an otherwise populated column is not - and must not be - flagged.
     check("a partly filled column is not flagged",
-          detail[("clean.xlsx", "Data")][9], None)
+          detail[("clean.xlsx", "Data")][10], None)
     check("a healthy sheet flags nothing",
-          detail[("two matching sheets.xlsx", "Jan")][9], None)
+          detail[("two matching sheets.xlsx", "Jan")][10], None)
 
     text = summary_text(book["Summary"])
     check("multi-sheet file is flagged",
