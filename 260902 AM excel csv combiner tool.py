@@ -1,8 +1,13 @@
 """
-260902 AM excel csv combiner.py
+260902 AM excel csv combiner tool.py
 
 Combines every Excel and CSV file in a folder into ONE table, keeping the data
 exactly as it looks on screen.
+
+This is the standalone tool file. It is self-contained - copy it anywhere,
+open it in IDLE and press F5. It carries the same code as
+"260902 AM excel csv combiner.py"; the self-test
+"260902 AM excel csv combiner selftest.py" drives that copy.
 
 WHAT IT READS
     .xlsx  .xlsm  .xltx  .xltm     (openpyxl)
